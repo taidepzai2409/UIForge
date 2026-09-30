@@ -224,6 +224,8 @@ export function GameSyncDialog(): React.JSX.Element | null {
 
   if (!open || !game) return null
   const nothing = !!pending && !pending.total && !pending.assets.length
+  // art written over the game's own files needs no code change: the agent only runs for the rest
+  const needsAgent = !!pending && (pending.total > 0 || pending.assets.some((a) => a.mode === 'incoming'))
 
   const agent = async (): Promise<void> => {
     setBusy('agent')
@@ -243,7 +245,8 @@ export function GameSyncDialog(): React.JSX.Element | null {
       const r = await syncGame({ resample: opts.resample })
       setResult(r)
       setBusy(null)
-      if (opts.agent && r.changes.total + r.changes.assets.length > 0) await agent()
+      if (opts.agent && (r.changes.total > 0 || r.changes.assets.some((a) => a.mode === 'incoming'))) await agent()
+      else if (opts.agent) setLog(['— Chỉ có art ghi đè lên file của game: không cần chạy agent.'])
     } catch (e) {
       setError(String((e as Error)?.message ?? e))
       setBusy(null)
@@ -265,7 +268,7 @@ export function GameSyncDialog(): React.JSX.Element | null {
             <input type="checkbox" checked={opts.resample} onChange={(e) => setOpts({ ...opts, resample: e.target.checked })} /> Giữ kích thước pixel gốc
           </label>
           <label className="game-opt" title="Sau khi ghi, chạy Claude Code trong thư mục game để tự sửa code/CSS theo CHANGES.md">
-            <input type="checkbox" checked={opts.agent} onChange={(e) => setOpts({ ...opts, agent: e.target.checked })} /> Chạy agent của game
+            <input type="checkbox" checked={opts.agent} onChange={(e) => setOpts({ ...opts, agent: e.target.checked })} /> Chạy agent của game{pending && !needsAgent && !nothing ? <span className="dim"> (không cần)</span> : null}
           </label>
           <span style={{ flex: 1 }} />
           {busy === 'agent' && <button onClick={() => void window.api.stopAgent()}>Dừng agent</button>}

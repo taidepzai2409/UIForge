@@ -45,6 +45,8 @@ export interface CaptureRecipe {
   assetRoots?: string[]
   settleMs?: number
   exclude?: string[]
+  /** true: open a fresh window even if one with the same URL is still alive from the previous capture */
+  fresh?: boolean
   screens: CaptureScreen[]
   flows?: unknown[]
   start?: string
@@ -130,9 +132,6 @@ const SHOW_TEXT = `(() => {
   document.getElementById('__uiforge_notext')?.remove()
 })()`
 
-function hasText(els: RawElement[]): boolean {
-  return els.some((e) => e.type === 'text' || (!!e.children && hasText(e.children)))
-}
 
 function toPosix(p: string): string {
   return p.replace(/\\/g, '/')
@@ -163,6 +162,42 @@ function resolveAsset(url: string | undefined, pageUrl: string, root: string, as
   return null
 }
 
+/** a code-drawn cut-out that overlaps a text needs the text-free shot; nothing else does */
+function needsCleanShot(els: RawElement[]): boolean {
+  const texts: RawElement[] = []
+  const cuts: RawElement[] = []
+  const walk = (list: RawElement[]): void => {
+    for (const e of list) {
+      if (e.type === 'text') texts.push(e)
+      else if ((e.type === 'image' || e.type === 'nineslice') && !e.assetUrl && !e.assetData) cuts.push(e)
+      if (e.children) walk(e.children)
+    }
+  }
+  walk(els)
+  return cuts.some((c) => texts.some((t) => t.x < c.x + c.width && t.x + t.width > c.x && t.y < c.y + c.height && t.y + t.height > c.y))
+}
+
+// The capture window stays open between calls (same URL + size): re-capturing one screen then costs the
+// screen's own `enter` instead of a full game load. Closed after a few minutes without use.
+interface LiveWindow {
+  win: BrowserWindow
+  url: string
+  width: number
+  height: number
+  cdp: boolean
+  timer: NodeJS.Timeout | null
+}
+let live: LiveWindow | null = null
+const LIVE_TTL = 4 * 60 * 1000
+
+export function closeCaptureWindow(): void {
+  if (live) {
+    if (live.timer) clearTimeout(live.timer)
+    if (!live.win.isDestroyed()) live.win.destroy()
+    live = null
+  }
+}
+
 function countElements(els: OutElement[], acc = { elements: 0, sources: 0, snapshots: 0 }): { elements: number; sources: number; snapshots: number } {
   for (const e of els) {
     acc.elements++
@@ -181,38 +216,57 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
   await fs.mkdir(outDir, { recursive: true })
   const assetRoots = ['', 'public', 'static', 'src', 'dist', ...(recipe.assetRoots ?? [])]
   const { width, height } = recipe.viewport
-  const win = new BrowserWindow({
-    show: false,
-    width,
-    height,
-    useContentSize: true,
-    frame: false,
-    enableLargerThanScreen: true,
-    webPreferences: { contextIsolation: true, sandbox: true, partition: 'persist:game-capture', backgroundThrottling: false }
-  })
-  const wc = win.webContents
-  wc.setAudioMuted(true)
-  // art may just have been replaced on disk: never show a cached copy
-  await wc.session.clearCache()
-  // DevTools protocol: a viewport of exactly the design size (the window itself cannot be larger than the
-  // screen) and screenshots of that viewport
+  const reuse = !recipe.fresh && live && !live.win.isDestroyed() && live.url === recipe.url && live.width === width && live.height === height
+  if (!reuse) closeCaptureWindow()
+  if (live?.timer) clearTimeout(live.timer)
+  let win: BrowserWindow
   let cdp = false
-  try {
-    // (emulation commands crash Electron when no document has been loaded yet)
-    await wc.loadURL('about:blank')
-    wc.debugger.attach('1.3')
-    await wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
-    await wc.debugger.sendCommand('Page.enable')
-    await wc.debugger.sendCommand('Network.enable')
-    await wc.debugger.sendCommand('Network.setCacheDisabled', { cacheDisabled: true })
-    await wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: TRACK_BLOBS })
-    cdp = true
-  } catch (e) {
-    console.warn('[capture] devtools protocol unavailable', e)
+  if (reuse && live) {
+    win = live.win
+    cdp = live.cdp
+  } else {
+    win = new BrowserWindow({
+      show: false,
+      width,
+      height,
+      useContentSize: true,
+      frame: false,
+      enableLargerThanScreen: true,
+      webPreferences: { contextIsolation: true, sandbox: true, partition: 'persist:game-capture', backgroundThrottling: false }
+    })
+    win.webContents.setAudioMuted(true)
+    // art may just have been replaced on disk: never show a cached copy
+    await win.webContents.session.clearCache()
+    // DevTools protocol: a viewport of exactly the design size (the window itself cannot be larger than the
+    // screen) and screenshots of that viewport
+    try {
+      // (emulation commands crash Electron when no document has been loaded yet)
+      await win.webContents.loadURL('about:blank')
+      win.webContents.debugger.attach('1.3')
+      await win.webContents.debugger.sendCommand('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false })
+      await win.webContents.debugger.sendCommand('Page.enable')
+      await win.webContents.debugger.sendCommand('Network.enable')
+      await win.webContents.debugger.sendCommand('Network.setCacheDisabled', { cacheDisabled: true })
+      await win.webContents.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: TRACK_BLOBS })
+      cdp = true
+    } catch (e) {
+      console.warn('[capture] devtools protocol unavailable', e)
+    }
+    live = { win, url: recipe.url, width, height, cdp, timer: null }
   }
+  const wc = win.webContents
   const shoot = async (): Promise<Electron.NativeImage> => {
+    // capturePage honours the emulated viewport and takes ~30 ms; Page.captureScreenshot on a hidden window
+    // takes ~3 s, so it is only the fallback
     let image: Electron.NativeImage | null = null
-    if (cdp) {
+    try {
+      const quick = await wc.capturePage()
+      const qs = quick.getSize()
+      if (qs.width === width && qs.height === height && !quick.isEmpty()) image = quick
+    } catch {
+      /* fall back to the protocol */
+    }
+    if (!image && cdp) {
       try {
         const r = (await wc.debugger.sendCommand('Page.captureScreenshot', { format: 'png' })) as { data: string }
         image = nativeImage.createFromBuffer(Buffer.from(r.data, 'base64'))
@@ -230,10 +284,13 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
   })
   const out: CaptureOutput = { design: { schema: 'uiforge-game-design', version: 1, game: { name: recipe.name, root: toPosix(root), engine: recipe.engine, devUrl: recipe.url }, screens: [], flows: recipe.flows, start: recipe.start }, report: [] }
   try {
-    let loaded = false
+    let loaded = !!reuse
     for (const screen of recipe.screens) {
       onProgress?.(`capture ${screen.id}`)
       const warnings: string[] = []
+      const t0 = Date.now()
+      const lap: string[] = []
+      const mark = (what: string): void => void lap.push(`${what} ${Date.now() - t0}ms`)
       if (!loaded || screen.reload) {
         try {
           await wc.loadURL(recipe.url)
@@ -267,6 +324,7 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
         if (!ok) warnings.push(`waitFor không thành true sau 15 s: ${screen.waitFor}`)
       }
       await sleep(screen.waitMs ?? (screen.enter ? (recipe.settleMs ?? 1500) / 2 : 100))
+      mark('ready')
 
       let extracted: ExtractResult = { engine: 'dom', width, height, elements: [], warnings: [] }
       if (!screen.screenshotOnly) {
@@ -278,6 +336,7 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
         }
       }
       warnings.push(...extracted.warnings)
+      mark('extract')
 
       // excluded things (a popup left open, the game world…) stay out of the shots
       const hasExcluded = !screen.screenshotOnly && (await wc.executeJavaScript('(window.__uiforgeExcluded || []).length', true).catch(() => 0))
@@ -288,7 +347,7 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
       let image = await shoot()
       // second shot without any text: cut-outs of code-drawn elements must not have their labels baked in
       let clean: Electron.NativeImage | null = null
-      if (hasText(extracted.elements)) {
+      if (needsCleanShot(extracted.elements)) {
         try {
           await wc.executeJavaScript(HIDE_TEXT, true)
           await sleep(120)
@@ -314,6 +373,7 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
       if (clipped) image = image.crop(clip)
       if (clean && clipped) clean = clean.crop(clip)
 
+      mark('shots')
       const stem = screen.id.replace(/[^a-zA-Z0-9_\-.]+/g, '_')
       const file = join(outDir, `${stem}.png`)
       await fs.writeFile(file, image.toPNG())
@@ -348,18 +408,15 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
       await Promise.all(own)
       if (unresolved.size) warnings.push(`không tìm thấy file nguồn cho ${unresolved.size} ảnh (dùng ảnh cắt từ screenshot; thêm assetRoots nếu cần): ${Array.from(unresolved).slice(0, 5).join(', ')}`)
       out.design.screens.push({ id: screen.id, name: screen.name, width: clip.width, height: clip.height, kind: screen.kind, screenshot: toPosix(relative(root, file)), snapshotFrom: cleanFile ? toPosix(relative(root, cleanFile)) : undefined, code: screen.code, elements })
+      mark('files')
+      console.log(`[capture] ${screen.id}: ${lap.join(', ')}`)
       out.report.push({ id: screen.id, engine: extracted.engine, ...countElements(elements), warnings })
     }
     if (consoleErrors.length && out.report[0]) out.report[0].warnings.push(`console error của game: ${consoleErrors.join(' | ')}`)
   } finally {
-    if (cdp) {
-      try {
-        wc.debugger.detach()
-      } catch {
-        /* already gone */
-      }
-    }
-    win.destroy()
+    wc.removeAllListeners('console-message')
+    if (live && live.win === win) live.timer = setTimeout(closeCaptureWindow, LIVE_TTL)
+    else if (!win.isDestroyed()) win.destroy()
   }
   return out
 }

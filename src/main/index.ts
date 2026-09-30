@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, Menu, session, clipboard } 
 import { join, dirname } from 'node:path'
 import { promises as fs } from 'node:fs'
 import { startBridge } from './bridge'
-import { captureGame, type CaptureRecipe } from './capture'
+import { captureGame, closeCaptureWindow, type CaptureRecipe } from './capture'
 import { runAgent, stopAgent } from './agent'
 
 if (process.env.DM_USER_DATA) app.setPath('userData', process.env.DM_USER_DATA)
@@ -172,6 +172,7 @@ function setupIpc(): void {
   ipcMain.handle('agent:run', async (_e, opts: { cwd: string; prompt: string }) => runAgent(() => win, opts))
   ipcMain.handle('agent:stop', async () => stopAgent())
   ipcMain.handle('game:capture', async (_e, recipe: CaptureRecipe) => captureGame(recipe))
+  ipcMain.handle('game:captureReset', async () => closeCaptureWindow())
 }
 
 function logCrash(msg: string): void {
@@ -203,6 +204,8 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+
+app.on('before-quit', () => closeCaptureWindow())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

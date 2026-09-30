@@ -47,6 +47,8 @@ const api = {
     return () => ipcRenderer.removeListener('agent:event', fn)
   },
   captureGame: (recipe: unknown): Promise<unknown> => ipcRenderer.invoke('game:capture', recipe),
+  /** closes the live capture window so the next capture reloads the game (art on disk changed) */
+  captureReset: (): Promise<void> => ipcRenderer.invoke('game:captureReset'),
   onAuto: (channel: 'auto:openProject' | 'auto:importPsd' | 'auto:script', cb: (arg: string) => void): void => {
     ipcRenderer.on(channel, (_e, arg) => cb(arg))
   },

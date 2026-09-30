@@ -927,11 +927,12 @@ server.registerTool(
       screens: z.array(captureScreen).optional(),
       flows: z.array(z.record(z.string(), z.unknown())).optional().describe('[{from: "màn/element", to: "màn", action?, trigger?}]'),
       start: z.string().optional(),
-      only: z.array(z.string()).optional().describe('chỉ capture các màn có id này (màn khác trong app giữ nguyên)'),
+      only: z.array(z.string()).optional().describe('chỉ capture các màn có id này (màn khác trong app giữ nguyên) — NHANH, dùng khi capture lại'),
+      fresh: z.boolean().optional().describe('mở cửa sổ game mới thay vì dùng lại cửa sổ đang sống từ lần capture trước'),
       dryRun: z.boolean().optional()
     }
   },
-  async ({ root, only, dryRun, ...given }) => {
+  async ({ root, only, dryRun, fresh, ...given }) => {
     if (!(await appAvailable())) throw new Error('App UIForge chưa chạy và không tự mở được.')
     const recipeFile = join(gameDir(root), 'capture.json')
     const saved = existsSync(recipeFile) ? (JSON.parse(await readFile(recipeFile, 'utf8')) as Record<string, unknown>) : {}
@@ -941,7 +942,7 @@ server.registerTool(
     if (!recipe.url || !recipe.viewport || !Array.isArray(recipe.screens) || !recipe.screens.length) throw new Error('Chưa có recipe: cần url, viewport {width,height} và screens[] (xem game_guide).')
     await mkdir(gameDir(root), { recursive: true })
     if (!dryRun) await writeFile(recipeFile, JSON.stringify(recipe, null, 2))
-    const run = only?.length ? { ...recipe, screens: (recipe.screens as { id: string }[]).filter((s) => only.includes(s.id)) } : recipe
+    const run = { ...recipe, ...(fresh ? { fresh: true } : {}), ...(only?.length ? { screens: (recipe.screens as { id: string }[]).filter((s) => only.includes(s.id)) } : {}) }
     const cap = await bridge<{ design: GameDesign; report: { id: string; engine: string; elements: number; sources: number; snapshots: number; warnings: string[] }[] }>('captureGame', run)
     await writeFile(join(gameDir(root), 'design.json'), JSON.stringify(cap.design, null, 2))
     const trees = cap.design.screens.map((s) => `## ${s.id} (${s.width}×${s.height})\n${elementTree(s.elements).join('\n')}`).join('\n\n')

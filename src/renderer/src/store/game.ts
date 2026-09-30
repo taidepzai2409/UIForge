@@ -105,18 +105,36 @@ export interface PushResult extends MergeReport {
   pending: number
 }
 
+interface AssetCache {
+  [key: string]: { mtimeMs: number; size: number; assetId: string; width: number; height: number }
+}
+
+async function readCache(dir: string): Promise<AssetCache> {
+  try {
+    return JSON.parse(await window.api.readText(`${dir}/asset-cache.json`)) as AssetCache
+  } catch {
+    return {}
+  }
+}
+
 export async function pushGameDesign(design: GameDesign): Promise<PushResult> {
   if (!design || design.schema !== 'uiforge-game-design' || !Array.isArray(design.screens)) throw new Error('design không đúng schema "uiforge-game-design"')
   if (!design.game?.root || !design.game?.name) throw new Error('design.game cần name và root (đường dẫn tuyệt đối tới thư mục game)')
   const root = norm(design.game.root)
   design = { ...design, game: { ...design.game, root } }
+  const T0 = performance.now()
+  const lap = (what: string): void => console.log(`[push] ${what} ${Math.round(performance.now() - T0)}ms`)
   const dir = await ensureGameProject(root, design.game.name)
+  lap('project')
   const abs = (p: string): string => (isAbsolute(p) ? p : `${root}/${p}`)
   const warnings: string[] = []
   const byFile = new Map<string, Promise<Asset | undefined>>()
   const elementAsset = new Map<string, string>()
   const shotAsset = new Map<string, string>()
   const sourceAsset = new Map<string, Asset>()
+  // files the previous push already turned into assets (same mtime + size ⇒ same pixels): no read, no decode, no hash
+  const cache = await readCache(dir)
+  const cacheHits = { hit: 0, miss: 0 }
 
   const load = (key: string, fn: () => Promise<Asset>): Promise<Asset | undefined> => {
     let p = byFile.get(key)
@@ -128,6 +146,24 @@ export async function pushGameDesign(design: GameDesign): Promise<PushResult> {
       byFile.set(key, p)
     }
     return p
+  }
+  /** a game file (or a crop of it) as an asset, through the mtime/size cache */
+  const loadFile = (file: string, name: string, crop?: Crop): Promise<Asset | undefined> => {
+    const key = `${file}${crop ? `#${crop.x},${crop.y},${crop.width},${crop.height}` : ''}`
+    return load(key, async () => {
+      const st = await window.api.stat(abs(file))
+      if (!st) throw new Error('không thấy file')
+      const c = cache[key]
+      const known = c && c.mtimeMs === st.mtimeMs && c.size === st.size ? useEditor.getState().doc.assets[c.assetId] : undefined
+      if (known && (await window.api.exists(`${dir}/assets/${known.file}`))) {
+        cacheHits.hit++
+        return known
+      }
+      cacheHits.miss++
+      const a = await assetFromBytes(await window.api.readFile(abs(file)), name, `game:${file}`, crop)
+      cache[key] = { mtimeMs: st.mtimeMs, size: st.size, assetId: a.id, width: a.width, height: a.height }
+      return a
+    })
   }
 
   for (const screen of design.screens) {
@@ -145,35 +181,42 @@ export async function pushGameDesign(design: GameDesign): Promise<PushResult> {
         warnings.push(`${screen.id}: không đọc được screenshot ${screen.screenshot} (${String((e as Error)?.message ?? e)})`)
       }
     }
-    const visit = async (els: GameElement[]): Promise<void> => {
+    // every element's art loads concurrently (decoding runs off the main thread)
+    const jobs: Promise<void>[] = []
+    const visit = (els: GameElement[]): void => {
       for (const el of els) {
-        if (el.type === 'image' || el.type === 'nineslice') {
-          let asset: Asset | undefined
-          if (el.asset) {
-            const file = el.asset
-            asset = await load(`${file}${el.crop ? `#${el.crop.x},${el.crop.y},${el.crop.width},${el.crop.height}` : ''}`, async () => assetFromBytes(await window.api.readFile(abs(file)), baseName(file), `game:${file}`, el.crop))
-            if (asset && !el.crop) sourceAsset.set(file, asset)
-          }
-          if (!asset && el.image) {
-            const file = el.image
-            asset = await load(`own:${file}`, async () => assetFromBytes(await window.api.readFile(abs(file)), `${screen.id}_${el.name || el.id}`, `game-snapshot:${screen.id}/${el.id}`))
-          }
-          if (!asset && shot) {
-            // drawn by code / CSS, or the file is gone: cut it out of the game's own rendering
-            const s = shot
-            const c = { x: el.x * s.scale, y: el.y * s.scale, width: el.width * s.scale, height: el.height * s.scale }
-            const x0 = Math.max(0, Math.min(s.width - 1, c.x))
-            const y0 = Math.max(0, Math.min(s.height - 1, c.y))
-            const clipped = { x: x0, y: y0, width: Math.max(1, Math.min(s.width - x0, c.width - (x0 - c.x))), height: Math.max(1, Math.min(s.height - y0, c.height - (y0 - c.y))) }
-            asset = await load(`shot:${screen.id}:${Math.round(clipped.x)},${Math.round(clipped.y)},${Math.round(clipped.width)},${Math.round(clipped.height)}`, () => assetFromBytes(s.bytes, `${screen.id}_${el.name || el.id}`, `game-snapshot:${screen.id}/${el.id}`, clipped))
-          }
-          if (asset) elementAsset.set(`${screen.id}\n${el.id}`, asset.id)
-        }
-        if (el.children) await visit(el.children)
+        if (el.type === 'image' || el.type === 'nineslice') jobs.push(loadElement(el))
+        if (el.children) visit(el.children)
       }
     }
-    await visit(screen.elements)
+    const loadElement = async (el: GameElement): Promise<void> => {
+      let asset: Asset | undefined
+      if (el.asset) {
+        const file = el.asset
+        asset = await loadFile(file, baseName(file), el.crop)
+        if (asset && !el.crop) sourceAsset.set(file, asset)
+      }
+      if (!asset && el.image) {
+        const file = el.image
+        asset = await load(`own:${file}`, async () => assetFromBytes(await window.api.readFile(abs(file)), `${screen.id}_${el.name || el.id}`, `game-snapshot:${screen.id}/${el.id}`))
+      }
+      if (!asset && shot) {
+        // drawn by code / CSS, or the file is gone: cut it out of the game's own rendering
+        const s = shot
+        const c = { x: el.x * s.scale, y: el.y * s.scale, width: el.width * s.scale, height: el.height * s.scale }
+        const x0 = Math.max(0, Math.min(s.width - 1, c.x))
+        const y0 = Math.max(0, Math.min(s.height - 1, c.y))
+        const clipped = { x: x0, y: y0, width: Math.max(1, Math.min(s.width - x0, c.width - (x0 - c.x))), height: Math.max(1, Math.min(s.height - y0, c.height - (y0 - c.y))) }
+        asset = await load(`shot:${screen.id}:${Math.round(clipped.x)},${Math.round(clipped.y)},${Math.round(clipped.width)},${Math.round(clipped.height)}`, () => assetFromBytes(s.bytes, `${screen.id}_${el.name || el.id}`, `game-snapshot:${screen.id}/${el.id}`, clipped))
+      }
+      if (asset) elementAsset.set(`${screen.id}\n${el.id}`, asset.id)
+    }
+    visit(screen.elements)
+    await Promise.all(jobs)
   }
+  await window.api.writeFile(`${dir}/asset-cache.json`, JSON.stringify(cache))
+  lap(`assets (${cacheHits.hit} cache, ${cacheHits.miss} new)`)
+  if (cacheHits.hit) status(`Art: ${cacheHits.hit} file lấy từ cache, ${cacheHits.miss} file đọc mới`)
 
   let report: MergeReport = { screens: [], flows: 0, warnings: [] }
   const hadSync = !!useEditor.getState().doc.game?.syncedAt
@@ -200,7 +243,9 @@ export async function pushGameDesign(design: GameDesign): Promise<PushResult> {
       st.setView(fitViewToRect({ x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, st.canvasSize.width, st.canvasSize.height))
     }
   }
+  lap('merge')
   await saveProject(false, dir)
+  lap('save')
   const pending = diffGame(useEditor.getState().doc).total
   status(`Đã nhận ${report.screens.length} màn từ ${design.game.name}${pending ? ` · ${pending} thay đổi chờ sync` : ''}`)
   return { ...report, warnings: [...warnings, ...report.warnings], projectDir: dir, pending }
@@ -440,13 +485,15 @@ export async function syncGame(opts: SyncOptions = {}): Promise<SyncResult> {
     if (!changed.has(frame.id)) continue
     try {
       status(`Render ${frame.name}…`)
-      await window.api.writeFile(`${dir}/preview/${safeFileName(screenId)}.png`, await renderFramePng(page, frame, doc.assets, 1))
+      await window.api.writeFile(`${dir}/preview/${safeFileName(screenId)}.png`, await renderFramePng(page, frame, doc.assets, 0.5))
     } catch (e) {
       console.warn('preview failed', screenId, e)
     }
   }
   useEditor.getState().update((d) => void (d.game!.syncedAt = new Date().toISOString()), { history: false })
   await saveProject()
+  // the game's files changed: the next capture must load the game afresh, not reuse the live page
+  if (written.length) await window.api.captureReset()
   status(`Sync xong → ${root}: ${written.length} file art, ${changes.total} thay đổi UI`)
   return { changes, dir, written, unchanged, backups, files: { changes: `${dir}/changes.json`, markdown: `${dir}/CHANGES.md` } }
 }

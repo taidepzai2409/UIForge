@@ -52,6 +52,7 @@ Việc cần làm:
 
 - `enter` chạy trong trang (dùng được `await`); `reload: true` nếu màn cần tải lại trang; `waitFor` là biểu thức JS được thăm dò tới khi true.
 - Recipe được lưu ở `<root>/uiforge/capture.json`; lần sau chỉ cần `capture_game { "root": "…" }`.
+- **Tốc độ**: capture lại chỉ màn đang sửa bằng `only: ["gear"]` (1–2 s thay vì cả game); cửa sổ game được giữ sống ~4 phút giữa các lần gọi nên không phải load lại (`fresh: true` nếu muốn load mới); có `waitFor` chính xác thì đặt `waitMs: 100`, game load nhanh thì `settleMs: 600`. File art không đổi (mtime + size) được lấy từ cache, không đọc lại.
 - Kết quả trả về: số element mỗi màn, cây id (để viết `flows`), cảnh báo (ảnh không tìm thấy file nguồn → thêm `assetRoots`, ví dụ `["public"]`).
 - Id element phải ổn định giữa các lần capture: đặt `name` cho game object Phaser / `id` cho element DOM quan trọng (nút, panel). Id tự sinh dựa trên tên texture + thứ tự.
 - `flows.from`: `"<màn>/<id element>"` (khớp cả phần đuôi id hoặc tên), hoặc id màn (trigger cấp màn). `action`: navigate (mặc định) · overlay · swap · back · close.
