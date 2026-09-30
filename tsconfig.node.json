@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "paths": { "@/*": ["./src/renderer/src/*"] }
+  },
+  "include": ["electron.vite.config.ts", "src/main/**/*", "src/preload/**/*", "mcp/**/*", "src/renderer/src/model/**/*", "src/renderer/src/export/**/*", "src/renderer/src/psd/textEffects.ts"]
+}

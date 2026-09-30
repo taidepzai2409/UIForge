@@ -1,0 +1,86 @@
+{
+  "name": "uiforge",
+  "version": "0.2.0",
+  "description": "Figma-like UI layout tool for game teams",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build && npm run build:mcp",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.node.json",
+    "dist": "electron-vite build && electron-builder",
+    "build:mcp": "esbuild mcp/server.ts --bundle --platform=node --format=esm --target=node20 --packages=external --alias:@=./src/renderer/src --loader:.md=text --outfile=out/mcp/server.js",
+    "mcp": "node out/mcp/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "productName": "UIForge",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "ag-psd": "31.0.2",
+    "immer": "11.1.18",
+    "nanoid": "6.0.1",
+    "pixi.js": "8.21.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5",
+    "zustand": "5.0.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "44.4.1",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "typescript": "7.0.2",
+    "vite": "7.3.6"
+  },
+  "allowScripts": {
+    "electron@44.4.1": true,
+    "electron-winstaller@5.4.0": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
+  },
+  "build": {
+    "appId": "com.uiforge.design",
+    "productName": "UIForge",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "out/**",
+      "package.json",
+      "docs/LAYOUT_SPEC.md"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.graphics-design"
+    }
+  }
+}
