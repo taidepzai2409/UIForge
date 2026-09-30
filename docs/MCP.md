@@ -63,6 +63,13 @@ Chạy thử bằng tay: `node out/mcp/server.js --project <dir>` rồi gửi JS
 | `add_flow {from, to?, action?, trigger?, delay?, key?, transition?, direction?, duration?, easing?, overlay?}` / `remove_flow {id}` / `set_start_frame {frame}` | Tương tác prototype kiểu Figma: navigate / overlay (popup, dim, đóng khi bấm ngoài) / swap / back / close; trigger click, hover, press, drag, after-delay, key; transition dissolve, smart animate, move/push/slide/scale. |
 | `export_layout` | Xuất `export/` (JSON + PNG + preview + preview theo thiết bị + sprite atlas `atlas/` + FLOWS.md + SPEC.md). |
 | `save_project {dir?}` / `open_project {dir}` | Quản lý project. |
+| `game_guide` | Hướng dẫn nối game HTML5 với UIForge (đọc trước khi dùng các tool game). Chi tiết: [GAME_LINK.md](GAME_LINK.md). |
+| `capture_game {root, url?, engine?, game?, viewport?, screens?[], flows?[], only?, dryRun?}` | Chụp UI game đang chạy (Phaser display list / DOM) trong cửa sổ ẩn, nối ảnh về file art trong thư mục game, tạo project `<root>/uiforge` với 1 frame mỗi màn + flows. Recipe lưu ở `<root>/uiforge/capture.json`. |
+| `push_game_design {file \| design}` | Đẩy UI game từ JSON `uiforge-game-design` tự dựng (game không capture được). |
+| `get_game_changes {root}` | Thay đổi artist đã làm mà game chưa có: art, vị trí, chữ, ẩn/hiện, thêm/xoá, flow, kèm `code` từng element. |
+| `sync_game {root, resample?, runAgent?}` | Ghi art đã thay đè lên file của game (backup), art mới vào `uiforge/incoming/`, `uiforge/CHANGES.md` + `changes.json` + `layout/` + `preview/`; `runAgent` chạy Claude Code trong thư mục game để tự áp dụng. |
+| `ack_game_changes {root}` | Game đã khớp thiết kế: lấy hiện trạng làm mốc mới. |
+| `replace_game_art {root, source \| node \| folder, file?}` | Thay art trong project game (một file nguồn = mọi chỗ dùng đổi theo; thư mục = khớp theo tên). |
 
 ## Dựng UX từ ảnh (screenshot / mockup)
 

@@ -5,6 +5,7 @@
 // conversion to Unity (Y up) happens only at export time (see export/layout.ts).
 // ---------------------------------------------------------------------------
 import type { AdjustmentLayer, LayerEffectsInfo } from 'ag-psd'
+import type { GameLink } from './game'
 
 export type NodeId = string
 
@@ -321,6 +322,8 @@ export interface DesignDocument {
   previewDevices?: string[]
   /** Unity CanvasScaler settings used for multi-resolution simulation and export */
   scaler?: CanvasScalerSettings
+  /** set when this project mirrors the UI of a game project (see model/game.ts) */
+  game?: GameLink
 }
 
 export const DEFAULT_ANCHOR: Anchor = { minX: 0, minY: 0, maxX: 0, maxY: 0 }

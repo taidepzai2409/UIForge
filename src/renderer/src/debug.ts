@@ -20,6 +20,8 @@ import * as flows from '@/model/flows'
 import * as autosave from '@/store/autosave'
 import * as states from '@/model/states'
 import { bridgeHandlers } from '@/bridge'
+import * as gameStore from '@/store/game'
+import * as gameModel from '@/model/game'
 
 /** Exposes internals on window.__dm for automation scripts (DM_SCRIPT) and devtools debugging. */
 export function installDebugApi(): void {
@@ -51,6 +53,7 @@ export function installDebugApi(): void {
     ...flows,
     ...autosave,
     ...states,
+    game: { ...gameStore, ...gameModel },
     bridge: bridgeHandlers
   }
 }

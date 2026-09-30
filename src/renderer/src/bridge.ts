@@ -26,6 +26,8 @@ import { getCurrentPage, locate, useEditor } from '@/store/editor'
 import { exportLayout, importPsdFiles, openProject, saveProject } from '@/store/project'
 import { buildFrameLayout, buildPageManifest } from '@/export/layout'
 import { renderFramePng } from '@/canvas/render'
+import { ackGame, ensureGameProject, pendingChanges, pushGameDesign, replaceFromFolder, replaceNodeArt, replaceSource, runGameAgent, syncGame } from '@/store/game'
+import { buildChangesMarkdown, gameSources, type GameDesign } from '@/model/game'
 
 type Params = Record<string, unknown>
 type Handler = (p: Params) => Promise<unknown>
@@ -503,6 +505,35 @@ const handlers: Record<string, Handler> = {
     const { report, diffPng } = await compareFrame(doc(), page, frame, bytes, { threshold: typeof p.threshold === 'number' ? p.threshold : undefined, maxShift: typeof p.maxShift === 'number' ? p.maxShift : undefined, diffPng: !!p.diffPath || !!p.returnDiff })
     if (p.diffPath && diffPng) await window.api.writeFile(String(p.diffPath), diffPng)
     return { ...report, diffPath: p.diffPath ?? null, diffPngBase64: p.returnDiff && diffPng ? toBase64(diffPng) : undefined }
+  },
+  // ---- game link (model/game.ts, store/game.ts)
+  pushGameDesign: async (p) => pushGameDesign(p.design as GameDesign),
+  openGame: async (p) => {
+    const dir = await ensureGameProject(String(p.root), String(p.name ?? 'Game'))
+    const g = doc().game
+    if (!g) throw new Error(`${dir} chưa có dữ liệu game (chưa push lần nào — dùng capture_game hoặc push_game_design).`)
+    return { projectDir: dir, game: { name: g.name, root: g.root, engine: g.engine, devUrl: g.devUrl, revision: g.revision, pushedAt: g.pushedAt, syncedAt: g.syncedAt ?? null }, screens: Object.entries(g.screens).map(([id, s]) => ({ id, name: s.name, width: s.width, height: s.height, elements: Object.keys(s.elements).length })), sources: gameSources(doc()).map((s) => ({ source: s.source, width: s.width, height: s.height, usedBy: s.usedBy.length, replaced: s.replaced })) }
+  },
+  gameChanges: async () => {
+    const c = pendingChanges()
+    if (!c) throw new Error('Project đang mở chưa liên kết với game nào.')
+    return { changes: c, markdown: buildChangesMarkdown(c) }
+  },
+  syncGame: async (p) => {
+    const r = await syncGame({ resample: p.resample !== false })
+    if (!p.runAgent) return { ...r, markdown: buildChangesMarkdown(r.changes) }
+    const log: string[] = []
+    const agent = await runGameAgent((line) => log.push(line))
+    return { ...r, markdown: buildChangesMarkdown(r.changes), agent: { ...agent, log: log.slice(-60) } }
+  },
+  ackGame: async () => ackGame(),
+  replaceGameArt: async (p) => {
+    if (p.folder) return replaceFromFolder(String(p.folder))
+    if (!p.file) throw new Error('cần file (đường dẫn ảnh) hoặc folder')
+    const bytes = await window.api.readFile(String(p.file))
+    if (p.source) return { replaced: await replaceSource(String(p.source), bytes, String(p.file)) }
+    if (p.node) return { replaced: await replaceNodeArt(findNode(String(p.node)).node.id, bytes, String(p.file)) }
+    throw new Error('cần source (file ảnh của game) hoặc node')
   },
   findNodes: async (p) => {
     const q = String(p.query ?? '').toLowerCase()

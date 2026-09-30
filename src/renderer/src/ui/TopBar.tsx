@@ -80,6 +80,7 @@ export function TopBar(): React.JSX.Element {
   const selNode = selection.length === 1 ? getEntry(page, selection[0])?.node : undefined
   const canSlice = selNode?.type === 'image' || selNode?.type === 'nineslice'
   const [zoomOpen, setZoomOpen] = useState(false)
+  const gameName = useEditor((s) => s.doc.game?.name)
   return (
     <div className="topbar">
       <div className="tb-group">
@@ -115,6 +116,11 @@ export function TopBar(): React.JSX.Element {
         <button className="tb-btn" onClick={() => void exportLayout()} title={`Export layout (${keyOf('file.export')})`}>
           <span className="tb-label">Export</span>
         </button>
+        {gameName && (
+          <button className="tb-btn" onClick={() => window.dispatchEvent(new CustomEvent('dm:game-sync'))} title={`Ghi art + thay đổi UI về game ${gameName} (${keyOf('game.sync')})`}>
+            <span className="tb-label">Sync → Game</span>
+          </button>
+        )}
         <span className="tb-sep" />
         <div className="zoom-menu">
           <button className="tb-btn" onClick={() => setZoomOpen(!zoomOpen)} title="Zoom">

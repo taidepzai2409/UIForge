@@ -4,6 +4,7 @@ import { getEntry } from '@/model/nodes'
 import { isContainer } from '@/model/types'
 import { resetImageSize, toggleNineSlice } from './actions'
 import { zoomToSelection } from './shortcuts'
+import { pickAndReplaceNode } from '@/store/game'
 
 interface Pos {
   x: number
@@ -58,6 +59,7 @@ export function ContextMenu(): React.JSX.Element | null {
     <div className="ctx-menu" style={{ left: pos.x, top: pos.y }} onPointerDown={(e) => e.stopPropagation()}>
       <Item label={n?.type === 'nineslice' ? 'Chỉnh 9-slice' : 'Chuyển thành 9-Slice'} keys="N" disabled={!isImg} onClick={toggleNineSlice} />
       {n?.type === 'nineslice' && <Item label="Đổi về ảnh thường" onClick={() => st.convertToImage(n.id)} />}
+      <Item label="Thay ảnh…" disabled={!n || !['image', 'nineslice', 'rect', 'text'].includes(n.type)} onClick={() => n && void pickAndReplaceNode(n.id).catch((e) => useEditor.getState().setStatus(String((e as Error)?.message ?? e)))} />
       <Item label="Reset về kích thước ảnh gốc" disabled={!isImg} onClick={resetImageSize} />
       <Item label="Chỉnh ảnh (crop / lật / màu)…" keys="Ctrl+Shift+U" disabled={!isImg} onClick={() => window.dispatchEvent(new CustomEvent('dm:image-edit'))} />
       <Item label="Layer Style…" keys="Ctrl+Shift+L" disabled={!n || !['image', 'nineslice', 'text', 'group'].includes(n.type)} onClick={() => window.dispatchEvent(new CustomEvent('dm:layer-style'))} />

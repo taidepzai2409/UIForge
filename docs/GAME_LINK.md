@@ -1,0 +1,112 @@
+# UIForge ↔ game HTML5 (Game Link)
+
+Đưa UI của một game web/H5 lên UIForge để xem toàn bộ màn hình + flow, thay art, rồi đưa thay đổi ngược về game.
+
+```
+game ──capture_game / push_game_design──▶ UIForge (project ở <game>/uiforge/)
+                                            │  artist: xem màn + flow, thay art, kéo lại vị trí
+game ◀──────────── Sync → Game ─────────────┘  (ghi đè file art + uiforge/CHANGES.md cho agent của game)
+```
+
+Mỗi game có một project UIForge riêng nằm trong `<thư mục game>/uiforge/` (`project.json` + `assets/`). Mọi tool dưới đây nhận `root` = đường dẫn tuyệt đối tới thư mục game.
+
+## 1. Đưa UI của game lên app — `capture_game`
+
+App tự mở game trong một cửa sổ ẩn, đi tới từng màn bằng đoạn JS bạn đưa, chụp ảnh và đọc element:
+
+- **Phaser 3**: đọc display list của các scene đang chạy (Image, Sprite, NineSlice, Text, Container, Rectangle, Graphics…). Ảnh được nối về đúng file nguồn trong thư mục game (texture → URL → file).
+- **DOM/CSS**: đọc cây DOM dưới `root` (img, background-image, border-image → 9-slice, màu nền/bo góc → rect, chữ → text). Mỗi element kèm `code: "css: <selector>"`.
+- Thứ vẽ bằng code (Graphics, canvas, gradient, Spine) không có file nguồn → thành ảnh cắt từ screenshot (`snapshot`), vẫn thay art được.
+
+Việc cần làm:
+
+1. Chạy dev server của game (đúng cổng trong `.claude/launch.json`).
+2. Tìm cách tới từng màn bằng JS: hook debug có sẵn (`window.__game.scene.start('Lobby')`, `show('menu', true)`, `state.phase = 'won'`…), tham số URL, hoặc click giả. Không có hook thì thêm một hook debug nhỏ vào game (chỉ bật ở dev).
+3. Gọi `capture_game` với recipe. Lần đầu nên `dryRun: true` để xem id các element, sau đó thêm `flows` và gọi lại.
+
+```jsonc
+{
+  "root": "F:/Youtube Playables/games/nova-bounce",
+  "name": "Nova Bounce",
+  "url": "http://localhost:3133/",
+  "engine": "phaser",              // "phaser" | "dom" | "auto"
+  "game": "window.__game",         // Phaser.Game (bỏ trống = tự tìm)
+  "viewport": { "width": 720, "height": 1280 },   // = độ phân giải thiết kế của game
+  "settleMs": 1500,
+  "exclude": ["^particle", "debug"],              // regex theo id / tên / texture key
+  "screens": [
+    { "id": "lobby", "name": "Lobby", "enter": "window.__game.scene.start('Lobby')", "waitFor": "window.__game.scene.isActive('Lobby')" },
+    { "id": "board", "name": "Gameplay HUD", "enter": "window.__game.scene.start('Board')", "waitMs": 1200, "exclude": ["enemy", "ball"] },
+    { "id": "pause", "name": "Pause", "kind": "popup", "enter": "window.__game.scene.launch('Pause')", "scenes": ["Pause"] },
+    // game DOM: root = selector của màn; clip "elements" = frame ôm vừa popup
+    { "id": "victory", "kind": "popup", "engine": "dom", "root": "#victory", "clip": "elements", "enter": "show('victory', true)" }
+  ],
+  "flows": [
+    { "from": "lobby/btn_play", "to": "board" },
+    { "from": "board/btn_pause", "to": "pause", "action": "overlay" },
+    { "from": "pause/btn_resume", "action": "close" }
+  ],
+  "start": "lobby"
+}
+```
+
+- `enter` chạy trong trang (dùng được `await`); `reload: true` nếu màn cần tải lại trang; `waitFor` là biểu thức JS được thăm dò tới khi true.
+- Recipe được lưu ở `<root>/uiforge/capture.json`; lần sau chỉ cần `capture_game { "root": "…" }`.
+- Kết quả trả về: số element mỗi màn, cây id (để viết `flows`), cảnh báo (ảnh không tìm thấy file nguồn → thêm `assetRoots`, ví dụ `["public"]`).
+- Id element phải ổn định giữa các lần capture: đặt `name` cho game object Phaser / `id` cho element DOM quan trọng (nút, panel). Id tự sinh dựa trên tên texture + thứ tự.
+- `flows.from`: `"<màn>/<id element>"` (khớp cả phần đuôi id hoặc tên), hoặc id màn (trigger cấp màn). `action`: navigate (mặc định) · overlay · swap · back · close.
+- Chỉ capture những màn có thật trong game. Thêm mọi màn + popup: artist cần thấy toàn bộ.
+
+Kiểm tra: `render_frame { frame: "<tên màn>" }` trả ảnh app dựng lại; so với `uiforge/capture/<id>.png`.
+
+### Game không capture tự động được — `push_game_design`
+
+Tự dựng JSON `uiforge-game-design` (UI vẽ hết trên canvas bằng code, engine lạ…) rồi đẩy bằng `push_game_design { file }`:
+
+```jsonc
+{
+  "schema": "uiforge-game-design", "version": 1,
+  "game": { "name": "Koi Ascend", "root": "F:/…/games/koi-ascend", "engine": "canvas2d" },
+  "screens": [{
+    "id": "title", "name": "Title", "width": 720, "height": 1280, "kind": "screen",
+    "screenshot": "uiforge/capture/title.png",          // ảnh game thật (nền tham chiếu, khoá)
+    "elements": [                                         // dưới → trên; x,y,width,height tuyệt đối trong màn
+      { "id": "logo", "type": "image", "x": 110, "y": 180, "width": 500, "height": 220, "asset": "assets/logo.png", "code": "src/main.js:212" },
+      { "id": "btn_play", "type": "image", "x": 210, "y": 900, "width": 300, "height": 110, "snapshot": true, "interactive": true, "code": "src/main.js drawButton('play')" },
+      { "id": "txt_best", "type": "text", "x": 260, "y": 60, "width": 200, "height": 40, "text": "BEST 120", "fontSize": 32, "color": "#ffffff" },
+      { "id": "panel", "type": "group", "x": 60, "y": 400, "width": 600, "height": 300, "children": [ … ] }
+    ]
+  }],
+  "flows": [{ "from": "title/btn_play", "to": "hud" }]
+}
+```
+
+`type`: image · nineslice (`insets` theo px ảnh nguồn) · text · rect (`fill`, `cornerRadius`, `shape: "ellipse"`) · group. `asset` = file art tương đối so với `root` (`crop` nếu chỉ dùng một vùng của atlas/sprite sheet); không có file thì `snapshot: true`. `code` = chỗ trong source đặt element này — agent áp thay đổi sẽ sửa đúng chỗ đó.
+
+Push lại bao nhiêu lần cũng được: element artist chưa đụng thì đi theo game; element đã chỉnh trong app thì giữ nguyên bản chỉnh (vẫn nằm trong danh sách chờ sync).
+
+## 2. Thay art trong app
+
+- Tab **Game** (panel trái): danh sách file art của game đang dùng trong UI. Kéo-thả ảnh vào một dòng, hoặc bấm **Thay…**; một file thay = mọi chỗ dùng file đó đổi theo.
+- **Thay từ thư mục…**: chọn thư mục art mới, khớp theo tên file (`ui_btn_primary.png` → `public/assets/ui/ui_btn_primary.webp`), không khớp file nào thì khớp theo id/tên element (dùng cho thứ vẽ bằng code).
+- Chuột phải một node → **Thay ảnh…** (image, 9-slice, rect, text, ảnh snapshot).
+- Art mới khác tỉ lệ: node giữ tâm, co vừa khung cũ. Kéo lại vị trí/kích thước tuỳ ý — đó là thay đổi layout gửi về game.
+- MCP: `replace_game_art { root, source | node, file }` hoặc `{ root, folder }`.
+
+## 3. Sync → Game
+
+Nút **Sync → Game** (thanh trên, tab Game) hoặc tool `sync_game`:
+
+- File art có nguồn trong game bị **ghi đè tại chỗ** (bản cũ lưu ở `uiforge/backup/rev<N>/…`). Art mới cùng tỉ lệ nhưng khác kích thước pixel được thu về kích thước cũ → game chạy đúng ngay, không cần sửa code (tắt bằng `resample: false`).
+- Art cho element chưa có file (vẽ bằng code, vùng atlas, element mới) → `uiforge/incoming/<màn>__<element>.png`.
+- `uiforge/CHANGES.md` + `changes.json`: mọi thay đổi so với lần push gần nhất (dời/đổi cỡ, art, chữ, ẩn/hiện, thêm, xoá, flow), kèm `code` của từng element.
+- `uiforge/layout/<màn>.json`: toạ độ đích của mọi element; `uiforge/preview/<màn>.png`: ảnh đích.
+- Bật **Chạy agent của game**: app chạy `claude -p` trong thư mục game với prompt áp dụng `CHANGES.md`.
+
+## 4. Agent của game áp dụng thay đổi
+
+1. Đọc `uiforge/CHANGES.md` (hoặc `get_game_changes { root }`).
+2. "ĐÃ GHI ĐÈ": file đã đúng chỗ; chỉ sửa code nếu kích thước ảnh đổi. "ẢNH MỚI": chép từ `uiforge/incoming/` vào thư mục asset của game, nạp và dùng cho đúng element.
+3. Sửa vị trí/kích thước/chữ/ẩn-hiện/thêm/xoá đúng chỗ ghi ở `code`; giữ cơ chế responsive sẵn có; không đổi gameplay.
+4. Chạy build/test của game.
+5. Gọi `capture_game { root }` để đẩy lại UI thật — app lấy đó làm mốc mới, thứ gì còn lệch sẽ vẫn hiện trong danh sách chờ. Không capture được thì `ack_game_changes { root }`.

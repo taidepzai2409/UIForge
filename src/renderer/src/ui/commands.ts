@@ -105,6 +105,7 @@ export const COMMANDS: Command[] = [
   { id: 'file.saveAs', label: 'Save as', group: 'File', defaultKeys: ['Ctrl+Shift+S'], global: true, run: () => void saveProject(true) },
   { id: 'file.importPsd', label: 'Import PSD', group: 'File', defaultKeys: ['Ctrl+Shift+I'], global: true, run: () => void importPsdFiles() },
   { id: 'file.export', label: 'Export layout', group: 'File', defaultKeys: ['Ctrl+Shift+E'], global: true, run: () => void exportLayout() },
+  { id: 'game.sync', label: 'Sync → Game (ghi art + thay đổi về game)', group: 'File', defaultKeys: ['Ctrl+Alt+S'], global: true, run: () => window.dispatchEvent(new CustomEvent('dm:game-sync')) },
   { id: 'view.present', label: 'Present / stop', group: 'View', defaultKeys: ['F5'], global: true, run: () => s().setPresenting(!s().presenting) },
   { id: 'view.settings', label: 'Settings (shortcuts)', group: 'View', defaultKeys: ['Ctrl+,'], global: true, run: () => window.dispatchEvent(new CustomEvent('dm:settings')) },
   // ---- tools

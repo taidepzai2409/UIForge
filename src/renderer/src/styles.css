@@ -1363,3 +1363,35 @@ button.link {
 .dir-row .chip {
   min-width: 28px;
 }
+
+/* ---------------- game link ---------------- */
+.game-panel { display: flex; flex-direction: column; }
+.game-panel.drop { outline: 2px dashed var(--accent); outline-offset: -4px; }
+.game-head { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid var(--border); }
+.game-root { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.game-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.game-filter { padding: 6px 12px; }
+.game-filter input { width: 100%; }
+.game-list { flex: 1; overflow: auto; }
+.game-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 12px; cursor: pointer; border-left: 2px solid transparent; }
+.game-row:hover { background: var(--panel-hover); }
+.game-row.drop { background: var(--accent-bg); outline: 1px dashed var(--accent); outline-offset: -1px; }
+.game-row.replaced { border-left-color: var(--accent); }
+.game-thumb { width: 36px; height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 3px; background: repeating-conic-gradient(var(--panel2) 0 25%, var(--panel) 0 50%) 0 0/10px 10px; }
+.game-thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.game-row-text { flex: 1; min-width: 0; line-height: 15px; }
+.game-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text2); }
+.game-row-actions { display: flex; gap: 2px; visibility: hidden; }
+.game-row:hover .game-row-actions { visibility: visible; }
+.game-badge, .game-tag { font-size: 10px; line-height: 14px; padding: 0 5px; border-radius: 3px; background: var(--accent-bg); color: var(--accent); white-space: nowrap; flex-shrink: 0; }
+.game-tag.incoming, .game-tag.added { background: rgba(20, 174, 92, 0.18); color: #14ae5c; }
+.game-tag.removed { background: rgba(242, 72, 34, 0.18); color: var(--danger); }
+.game-sync code { font-family: Consolas, 'SF Mono', monospace; font-size: 11px; color: var(--text2); }
+.game-section { display: flex; flex-direction: column; gap: 2px; }
+.game-section-title { font-weight: 600; margin-top: 6px; }
+.game-change { display: flex; align-items: baseline; gap: 6px; line-height: 18px; cursor: default; }
+.game-change .dim { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.game-result { color: #14ae5c; line-height: 17px; }
+.game-error { color: var(--danger); line-height: 17px; }
+.game-opt { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.game-log { margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); font-family: Consolas, 'SF Mono', monospace; font-size: 11px; line-height: 16px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; flex-shrink: 0; }

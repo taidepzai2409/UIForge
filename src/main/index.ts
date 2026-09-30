@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain, dialog, shell, Menu, session, clipboard } 
 import { join, dirname } from 'node:path'
 import { promises as fs } from 'node:fs'
 import { startBridge } from './bridge'
+import { captureGame, type CaptureRecipe } from './capture'
+import { runAgent, stopAgent } from './agent'
 
 if (process.env.DM_USER_DATA) app.setPath('userData', process.env.DM_USER_DATA)
 
@@ -167,6 +169,9 @@ function setupIpc(): void {
   ipcMain.handle('win:setTitle', async (_e, t: string) => win?.setTitle(t))
   ipcMain.handle('clipboard:writeText', async (_e, t: string) => clipboard.writeText(t))
   ipcMain.handle('clipboard:readText', async () => clipboard.readText())
+  ipcMain.handle('agent:run', async (_e, opts: { cwd: string; prompt: string }) => runAgent(() => win, opts))
+  ipcMain.handle('agent:stop', async () => stopAgent())
+  ipcMain.handle('game:capture', async (_e, recipe: CaptureRecipe) => captureGame(recipe))
 }
 
 function logCrash(msg: string): void {
@@ -190,7 +195,10 @@ app.whenReady().then(() => {
   setupMenu()
   setupIpc()
   createWindow()
-  startBridge(() => win, Number(process.env.DM_BRIDGE_PORT ?? 47821))
+  // bridge methods answered by the main process itself (everything else goes to the renderer)
+  startBridge(() => win, Number(process.env.DM_BRIDGE_PORT ?? 47821), {
+    captureGame: (p) => captureGame(p as unknown as CaptureRecipe)
+  })
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

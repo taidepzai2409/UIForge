@@ -34,7 +34,9 @@ export function rpc(win: BrowserWindow | null, method: string, params: unknown, 
   })
 }
 
-export function startBridge(getWin: () => BrowserWindow | null, port: number): void {
+export type MainHandler = (params: Record<string, unknown>) => Promise<unknown>
+
+export function startBridge(getWin: () => BrowserWindow | null, port: number, mainHandlers: Record<string, MainHandler> = {}): void {
   const server = createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     if (req.method === 'GET' && req.url === '/health') {
@@ -51,7 +53,8 @@ export function startBridge(getWin: () => BrowserWindow | null, port: number): v
     req.on('end', async () => {
       try {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as { method: string; params?: unknown }
-        const result = await rpc(getWin(), body.method, body.params)
+        const own = mainHandlers[body.method]
+        const result = own ? await own((body.params ?? {}) as Record<string, unknown>) : await rpc(getWin(), body.method, body.params, body.method === 'syncGame' ? 3600000 : undefined)
         res.end(JSON.stringify({ result }))
       } catch (e) {
         res.statusCode = 500

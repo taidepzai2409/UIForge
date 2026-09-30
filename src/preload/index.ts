@@ -38,6 +38,15 @@ const api = {
   setTitle: (t: string): Promise<void> => ipcRenderer.invoke('win:setTitle', t),
   copyText: (t: string): Promise<void> => ipcRenderer.invoke('clipboard:writeText', t),
   readClipboardText: (): Promise<string> => ipcRenderer.invoke('clipboard:readText'),
+  /** runs Claude Code headless in `cwd`; resolves with the exit code */
+  runAgent: (opts: { cwd: string; prompt: string }): Promise<number | null> => ipcRenderer.invoke('agent:run', opts),
+  stopAgent: (): Promise<void> => ipcRenderer.invoke('agent:stop'),
+  onAgentEvent: (cb: (ev: { type: 'line' | 'exit'; text: string }) => void): (() => void) => {
+    const fn = (_e: unknown, ev: { type: 'line' | 'exit'; text: string }): void => cb(ev)
+    ipcRenderer.on('agent:event', fn)
+    return () => ipcRenderer.removeListener('agent:event', fn)
+  },
+  captureGame: (recipe: unknown): Promise<unknown> => ipcRenderer.invoke('game:capture', recipe),
   onAuto: (channel: 'auto:openProject' | 'auto:importPsd' | 'auto:script', cb: (arg: string) => void): void => {
     ipcRenderer.on(channel, (_e, arg) => cb(arg))
   },

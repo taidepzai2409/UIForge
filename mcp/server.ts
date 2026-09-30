@@ -21,6 +21,8 @@ import { DEFAULT_PREVIEW_DEVICES, DEVICE_PRESETS, scalerOf, simulateFrame } from
 import { applyAnchorSuggestions, suggestAnchors } from '@/model/autoAnchor'
 import { DEFAULT_OVERLAY, defaultsForAction, normalizeConnection } from '@/model/flows'
 import specMarkdown from '../docs/LAYOUT_SPEC.md'
+import gameGuide from '../docs/GAME_LINK.md'
+import { GAME_DIR, buildChangesMarkdown, diffGame, type GameDesign, type GameElement } from '@/model/game'
 
 // ----------------------------------------------------------------- args / state
 const args = process.argv.slice(2)
@@ -863,6 +865,160 @@ server.registerTool(
     const r = await bridge<{ summary: string[]; nodes: unknown[]; mismatched: number; checked: number; overallDiff: number }>('compareFrame', { frame, capturePath: resolve(capturePath), threshold, maxShift, diffPath: diffPath ? resolve(diffPath) : undefined })
     const bad = (r.nodes as { status: string }[]).filter((n) => n.status !== 'ok')
     return text({ summary: r.summary, overallDiff: r.overallDiff, checked: r.checked, mismatched: r.mismatched, nodes: bad, diffPath: diffPath ? resolve(diffPath) : null })
+  }
+)
+
+// ----------------------------------------------------------------- game link (HTML5 games ↔ UIForge)
+const posix = (p: string): string => p.replace(/\\/g, '/')
+const gameDir = (root: string): string => join(resolve(root), GAME_DIR)
+
+/** Makes `<root>/uiforge` the open project (app running) or the file-mode project. */
+async function openGame(root: string): Promise<unknown> {
+  projectDir = gameDir(root)
+  if (await appAvailable()) return bridge('openGame', { root: posix(resolve(root)) })
+  return null
+}
+
+function elementTree(els: GameElement[], depth = 0, out: string[] = []): string[] {
+  for (const e of els) {
+    if (out.length >= 400) break
+    const extra = e.type === 'text' ? ` "${(e.text ?? '').slice(0, 30)}"` : e.asset ? ` ${e.asset}` : e.snapshot ? ' (snapshot)' : ''
+    out.push(`${'  '.repeat(depth)}${e.id} [${e.type}${e.interactive ? ', interactive' : ''}] ${Math.round(e.x)},${Math.round(e.y)} ${Math.round(e.width)}×${Math.round(e.height)}${extra}`)
+    if (e.children) elementTree(e.children, depth + 1, out)
+  }
+  return out
+}
+
+server.registerTool('game_guide', { description: 'Hướng dẫn nối một game HTML5/web (Phaser, DOM/CSS, canvas) với UIForge: đưa mọi màn hình + flow của game lên app (capture_game / push_game_design), thay art, sync thay đổi về game và cách agent của game áp dụng. ĐỌC TRƯỚC khi dùng các tool game.', inputSchema: {} }, async () => text(gameGuide))
+
+const captureScreen = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  kind: z.enum(['screen', 'popup']).optional(),
+  enter: z.string().optional().describe('JS chạy trong trang để tới màn này (dùng được await)'),
+  reload: z.boolean().optional(),
+  waitFor: z.string().optional().describe('biểu thức JS, chờ tới khi true (tối đa 15 s)'),
+  waitMs: z.number().optional(),
+  engine: z.enum(['phaser', 'dom', 'auto']).optional(),
+  root: z.string().optional().describe('DOM: selector của màn'),
+  scenes: z.array(z.string()).optional().describe('Phaser: chỉ đọc các scene này'),
+  exclude: z.array(z.string()).optional(),
+  only: z.array(z.string()).optional().describe('chỉ giữ element có id/tên khớp regex (cả cây con) — vd một popup container'),
+  clip: z.union([z.literal('elements'), z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() })]).optional(),
+  screenshotOnly: z.boolean().optional(),
+  code: z.string().optional().describe('file source dựng màn này')
+})
+
+server.registerTool(
+  'capture_game',
+  {
+    description:
+      'Chụp UI của một game HTML5 đang chạy (dev server) và đưa lên UIForge: app mở game trong cửa sổ ẩn, chạy JS `enter` để tới từng màn, chụp ảnh, đọc element (Phaser display list hoặc DOM), nối ảnh về file art trong thư mục game, tạo/cập nhật project <root>/uiforge với một frame mỗi màn + flows. Recipe được lưu ở <root>/uiforge/capture.json nên lần sau chỉ cần {root}. Đọc game_guide trước. dryRun=true: chỉ trả cây element (để viết flows), không đẩy lên app.',
+    inputSchema: {
+      root: z.string().describe('đường dẫn tuyệt đối thư mục game'),
+      name: z.string().optional(),
+      url: z.string().optional().describe('URL dev server, vd http://localhost:3140/'),
+      engine: z.enum(['phaser', 'dom', 'auto']).optional(),
+      game: z.string().optional().describe('đường dẫn tới Phaser.Game, vd "window.__game"'),
+      viewport: z.object({ width: z.number(), height: z.number() }).optional().describe('độ phân giải thiết kế của game'),
+      assetRoots: z.array(z.string()).optional().describe('thư mục (tương đối root) mà dev server phục vụ ở "/", mặc định thử "", public, static, src, dist'),
+      settleMs: z.number().optional(),
+      exclude: z.array(z.string()).optional(),
+      screens: z.array(captureScreen).optional(),
+      flows: z.array(z.record(z.string(), z.unknown())).optional().describe('[{from: "màn/element", to: "màn", action?, trigger?}]'),
+      start: z.string().optional(),
+      only: z.array(z.string()).optional().describe('chỉ capture các màn có id này (màn khác trong app giữ nguyên)'),
+      dryRun: z.boolean().optional()
+    }
+  },
+  async ({ root, only, dryRun, ...given }) => {
+    if (!(await appAvailable())) throw new Error('App UIForge chưa chạy và không tự mở được.')
+    const recipeFile = join(gameDir(root), 'capture.json')
+    const saved = existsSync(recipeFile) ? (JSON.parse(await readFile(recipeFile, 'utf8')) as Record<string, unknown>) : {}
+    const recipe: Record<string, unknown> = { ...saved, root: posix(resolve(root)) }
+    for (const [k, v] of Object.entries(given)) if (v !== undefined) recipe[k] = v
+    recipe.name ??= resolve(root).split(/[\\/]/).pop()
+    if (!recipe.url || !recipe.viewport || !Array.isArray(recipe.screens) || !recipe.screens.length) throw new Error('Chưa có recipe: cần url, viewport {width,height} và screens[] (xem game_guide).')
+    await mkdir(gameDir(root), { recursive: true })
+    if (!dryRun) await writeFile(recipeFile, JSON.stringify(recipe, null, 2))
+    const run = only?.length ? { ...recipe, screens: (recipe.screens as { id: string }[]).filter((s) => only.includes(s.id)) } : recipe
+    const cap = await bridge<{ design: GameDesign; report: { id: string; engine: string; elements: number; sources: number; snapshots: number; warnings: string[] }[] }>('captureGame', run)
+    await writeFile(join(gameDir(root), 'design.json'), JSON.stringify(cap.design, null, 2))
+    const trees = cap.design.screens.map((s) => `## ${s.id} (${s.width}×${s.height})\n${elementTree(s.elements).join('\n')}`).join('\n\n')
+    if (dryRun) return { content: [{ type: 'text', text: JSON.stringify({ dryRun: true, screens: cap.report }, null, 2) }, { type: 'text', text: trees }] }
+    const pushed = await bridge<Record<string, unknown>>('pushGameDesign', { design: cap.design })
+    projectDir = gameDir(root)
+    return { content: [{ type: 'text', text: JSON.stringify({ captured: cap.report, pushed, recipe: recipeFile, hint: 'render_frame {frame} để xem app dựng lại; get_game_changes {root} để xem thứ còn lệch so với thiết kế.' }, null, 2) }, { type: 'text', text: trees }] }
+  }
+)
+
+server.registerTool(
+  'push_game_design',
+  {
+    description: 'Đẩy UI của game lên UIForge từ một JSON "uiforge-game-design" tự dựng (khi capture_game không đọc được, vd UI vẽ hết bằng canvas): screens[] (elements với rect tuyệt đối, asset = file art tương đối root, snapshot, code) + flows[]. Tạo/cập nhật project <root>/uiforge. Định dạng: xem game_guide.',
+    inputSchema: { file: z.string().optional().describe('đường dẫn file JSON'), design: z.record(z.string(), z.unknown()).optional().describe('hoặc truyền thẳng object') }
+  },
+  async ({ file, design }) => {
+    if (!(await appAvailable())) throw new Error('App UIForge chưa chạy và không tự mở được.')
+    const d = (design ?? (file ? JSON.parse(await readFile(resolve(file), 'utf8')) : null)) as GameDesign | null
+    if (!d) throw new Error('cần file hoặc design')
+    const r = await bridge<Record<string, unknown>>('pushGameDesign', { design: d })
+    if (d.game?.root) projectDir = gameDir(d.game.root)
+    return text(r)
+  }
+)
+
+server.registerTool(
+  'get_game_changes',
+  { description: 'Những thay đổi UI artist đã làm trong UIForge mà game chưa có (so với lần push gần nhất): art thay, dời/đổi cỡ, chữ, ẩn/hiện, thêm/xoá, flow — kèm `code` (chỗ trong source) của từng element. Không ghi gì. Agent của game đọc cái này (hoặc uiforge/CHANGES.md sau khi sync) để sửa code.', inputSchema: { root: z.string().describe('thư mục game') } },
+  async ({ root }) => {
+    await openGame(root)
+    if (await appUp()) {
+      const r = await bridge<{ changes: unknown; markdown: string }>('gameChanges')
+      return { content: [{ type: 'text', text: r.markdown }, { type: 'text', text: JSON.stringify(r.changes, null, 2) }] }
+    }
+    const { doc } = await loadDoc()
+    const c = diffGame(doc)
+    return { content: [{ type: 'text', text: buildChangesMarkdown(c) }, { type: 'text', text: JSON.stringify(c, null, 2) }] }
+  }
+)
+
+server.registerTool(
+  'sync_game',
+  {
+    description: 'Ghi thay đổi từ UIForge về thư mục game (giống nút "Sync → Game"): ghi đè file art đã thay (bản cũ vào uiforge/backup), art mới chưa có file vào uiforge/incoming, và uiforge/CHANGES.md + changes.json + layout/<màn>.json + preview/<màn>.png. Cần app đang chạy.',
+    inputSchema: { root: z.string(), resample: z.boolean().optional().describe('mặc định true: art cùng tỉ lệ khác kích thước pixel được thu về kích thước cũ để game không cần sửa code'), runAgent: z.boolean().optional().describe('true: sau khi ghi, chạy Claude Code headless trong thư mục game để tự áp dụng CHANGES.md (KHÔNG dùng khi chính bạn là agent của game — tự áp dụng đi)') }
+  },
+  async ({ root, resample, runAgent }) => {
+    if (!(await appAvailable())) throw new Error('App UIForge chưa chạy.')
+    await openGame(root)
+    const r = await bridge<{ markdown: string; written: string[]; unchanged: string[]; backups: string[]; dir: string; changes: { total: number }; agent?: unknown }>('syncGame', { resample, runAgent })
+    return { content: [{ type: 'text', text: JSON.stringify({ dir: r.dir, written: r.written, unchanged: r.unchanged, backups: r.backups, uiChanges: r.changes.total, agent: r.agent }, null, 2) }, { type: 'text', text: r.markdown }] }
+  }
+)
+
+server.registerTool(
+  'ack_game_changes',
+  { description: 'Báo cho UIForge rằng game đã áp dụng xong mọi thay đổi trong CHANGES.md: thiết kế hiện tại thành mốc mới, danh sách chờ về 0. Ưu tiên capture_game {root} (đo lại UI thật) — chỉ dùng tool này khi không capture được.', inputSchema: { root: z.string() } },
+  async ({ root }) => {
+    if (!(await appAvailable())) throw new Error('App UIForge chưa chạy.')
+    await openGame(root)
+    return text(await bridge('ackGame'))
+  }
+)
+
+server.registerTool(
+  'replace_game_art',
+  {
+    description: 'Thay art trong project game trên UIForge (giống kéo-thả ảnh trong tab Game): source = file art của game (mọi element dùng file đó đổi theo) hoặc node = một element; file = ảnh mới. Hoặc folder = thư mục art mới, khớp theo tên file / id element. Sau đó sync_game để ghi về game.',
+    inputSchema: { root: z.string(), source: z.string().optional().describe('file art tương đối root, vd public/assets/ui/ui_btn_primary.png'), node: z.string().optional(), file: z.string().optional(), folder: z.string().optional() }
+  },
+  async ({ root, source, node, file, folder }) => {
+    if (!(await appAvailable())) throw new Error('App UIForge chưa chạy.')
+    const info = await openGame(root)
+    const r = await bridge('replaceGameArt', { source, node, file: file ? posix(resolve(file)) : undefined, folder: folder ? posix(resolve(folder)) : undefined })
+    await bridge('save', {})
+    return text({ result: r, game: (info as { game?: unknown })?.game })
   }
 )
 

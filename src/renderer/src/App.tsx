@@ -17,6 +17,7 @@ import { ImportPsdDialog } from '@/ui/ImportPsdDialog'
 import { ShortcutsDialog } from '@/ui/ShortcutsDialog'
 import { LayerStyleDialog } from '@/ui/LayerStyleDialog'
 import { AssetsPanel } from '@/ui/AssetsPanel'
+import { GamePanel, GameSyncDialog } from '@/ui/GamePanel'
 import { DevicePreview } from '@/ui/DevicePreview'
 import { ImageEditDialog } from '@/ui/ImageEditDialog'
 import { useState } from 'react'
@@ -25,7 +26,8 @@ import { initTheme } from '@/store/theme'
 
 export default function App(): React.JSX.Element {
   const presenting = useEditor((s) => s.presenting)
-  const [leftTab, setLeftTab] = useState<'layers' | 'assets'>('layers')
+  const [leftTab, setLeftTab] = useState<'layers' | 'assets' | 'game'>('layers')
+  const hasGame = useEditor((s) => !!s.doc.game)
   useEffect(() => {
     const un = installShortcuts()
     installDebugApi()
@@ -33,6 +35,10 @@ export default function App(): React.JSX.Element {
     const stopAutosave = startAutosave()
     initTheme()
     void loadSystemFonts()
+    // files dropped outside a drop target must not navigate the window away from the app
+    const noNav = (e: DragEvent): void => e.preventDefault()
+    window.addEventListener('dragover', noNav)
+    window.addEventListener('drop', noNav)
     // automation hooks (env vars in main) run sequentially
     let chain: Promise<unknown> = Promise.resolve()
     let autoProject = false
@@ -55,6 +61,8 @@ export default function App(): React.JSX.Element {
     return () => {
       un()
       stopAutosave()
+      window.removeEventListener('dragover', noNav)
+      window.removeEventListener('drop', noNav)
     }
   }, [])
   return (
@@ -69,14 +77,19 @@ export default function App(): React.JSX.Element {
             <button className={leftTab === 'assets' ? 'active' : ''} onClick={() => setLeftTab('assets')}>
               Assets
             </button>
+            <button className={leftTab === 'game' ? 'active' : ''} onClick={() => setLeftTab('game')} title="Art + thay đổi của game đang nối với project này">
+              Game{hasGame ? ' •' : ''}
+            </button>
           </div>
           {leftTab === 'layers' ? (
             <>
               <PagesPanel />
               <LayersPanel />
             </>
-          ) : (
+          ) : leftTab === 'assets' ? (
             <AssetsPanel />
+          ) : (
+            <GamePanel />
           )}
         </aside>
         <Viewport />
@@ -92,6 +105,7 @@ export default function App(): React.JSX.Element {
       <LayerStyleDialog />
       <DevicePreview />
       <ImageEditDialog />
+      <GameSyncDialog />
       {presenting && <Present />}
     </div>
   )
