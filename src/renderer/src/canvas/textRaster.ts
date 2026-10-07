@@ -4,6 +4,7 @@
 import { CanvasTextMetrics } from 'pixi.js'
 import type { TextNode } from '@/model/types'
 import { rgbaToCss } from '@/model/color'
+import { epochFamily } from './fontEpoch'
 
 export interface TextRaster {
   canvas: HTMLCanvasElement
@@ -13,7 +14,7 @@ export interface TextRaster {
 }
 
 export function textFontString(n: TextNode, scale = 1): string {
-  return `${n.italic ? 'italic ' : ''}${n.fontWeight} ${n.fontSize * scale}px "${n.fontFamily}", Arial, sans-serif`
+  return `${n.italic ? 'italic ' : ''}${n.fontWeight} ${n.fontSize * scale}px "${n.fontFamily}", Arial, sans-serif, "${epochFamily()}"`
 }
 
 export function rasterizeText(n: TextNode, scale = 1): TextRaster {

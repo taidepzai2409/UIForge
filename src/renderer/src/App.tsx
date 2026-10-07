@@ -22,6 +22,7 @@ import { DevicePreview } from '@/ui/DevicePreview'
 import { ImageEditDialog } from '@/ui/ImageEditDialog'
 import { useState } from 'react'
 import { loadSystemFonts } from '@/store/fonts'
+import { watchDocumentFonts } from '@/canvas/fontEpoch'
 import { initTheme } from '@/store/theme'
 
 export default function App(): React.JSX.Element {
@@ -35,6 +36,7 @@ export default function App(): React.JSX.Element {
     const stopAutosave = startAutosave()
     initTheme()
     void loadSystemFonts()
+    watchDocumentFonts()
     // files dropped outside a drop target must not navigate the window away from the app
     const noNav = (e: DragEvent): void => e.preventDefault()
     window.addEventListener('dragover', noNav)

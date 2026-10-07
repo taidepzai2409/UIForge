@@ -11,6 +11,7 @@ import { useHover } from '@/store/hover'
 import { actionLabel, ownerFrameId, transitionLabel, triggerLabel } from '@/model/flows'
 import { canvasPalette, useTheme } from '@/store/theme'
 import { toScreen, toWorld, zoomAt } from './viewMath'
+import { onFontEpoch } from './fontEpoch'
 import {
   HANDLES,
   HANDLE_SIZE,
@@ -68,6 +69,7 @@ class ViewportController {
   unsub: (() => void) | null = null
   unsubHover: (() => void) | null = null
   unsubTheme: (() => void) | null = null
+  unsubFonts: (() => void) | null = null
   ready = false
   raf = 0
 
@@ -104,6 +106,7 @@ class ViewportController {
       this.requestRender()
     })
     this.unsub = useEditor.subscribe(() => this.requestRender())
+    this.unsubFonts = onFontEpoch(() => this.requestRender())
 
     canvas.addEventListener('pointerdown', this.onPointerDown)
     canvas.addEventListener('pointermove', this.onPointerMove)
@@ -140,6 +143,7 @@ class ViewportController {
   destroy(): void {
     window.removeEventListener('dm:delete-guide', this.onDeleteGuide)
     this.unsub?.()
+    this.unsubFonts?.()
     this.unsubHover?.()
     this.unsubTheme?.()
     window.removeEventListener('keydown', this.onKeyDown)

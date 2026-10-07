@@ -52,12 +52,23 @@ export interface RawElement {
   children?: RawElement[]
 }
 
+/** a webfont face of the page (@font-face rule or a FontFace loaded by script) */
+export interface WebFont {
+  family: string
+  weight: string
+  style: string
+  /** absolute URLs from `src`, in the rule's order */
+  urls: string[]
+}
+
 export interface ExtractResult {
   engine: 'phaser' | 'dom'
   width: number
   height: number
   elements: RawElement[]
   warnings: string[]
+  /** every webfont face the page declares (the game's font kit, used or not on this screen) */
+  fonts?: WebFont[]
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -624,11 +635,73 @@ export function extractInPage(opts: ExtractOptions): ExtractResult {
     return kept
   }
 
+  /**
+   * @font-face rules and script-loaded FontFaces (matched to fetched font files by name). All of them, not only
+   * the families on this screen: fallbacks (CJK) and other languages use them too, and the artist picks from them.
+   */
+  const webFonts = (): WebFont[] => {
+    const clean = (f: string): string => f.trim().replace(/^["']|["']$/g, '')
+    const out: WebFont[] = []
+    const seen = new Set<string>()
+    const add = (f: WebFont): void => {
+      const k = `${f.family.toLowerCase()}|${f.weight}|${f.style}|${f.urls.join(',')}`
+      if (!f.family || seen.has(k)) return
+      seen.add(k)
+      out.push(f)
+    }
+    const visitRules = (rules: CSSRuleList, base: string): void => {
+      for (const r of Array.from(rules)) {
+        if (r instanceof CSSFontFaceRule) {
+          const st = r.style
+          const urls: string[] = []
+          const src = st.getPropertyValue('src')
+          const re = /url\(\s*(['"]?)(.*?)\1\s*\)/g
+          let m: RegExpExecArray | null
+          while ((m = re.exec(src))) {
+            try {
+              urls.push(new URL(m[2], base).href)
+            } catch {
+              /* bad url */
+            }
+          }
+          add({ family: clean(st.getPropertyValue('font-family')), weight: st.getPropertyValue('font-weight') || '400', style: st.getPropertyValue('font-style') || 'normal', urls })
+        } else if (r instanceof CSSImportRule && r.styleSheet) {
+          try {
+            visitRules(r.styleSheet.cssRules, r.styleSheet.href ?? base)
+          } catch {
+            /* cross-origin */
+          }
+        } else if ((r as CSSGroupingRule).cssRules) visitRules((r as CSSGroupingRule).cssRules, base)
+      }
+    }
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        visitRules(sheet.cssRules, sheet.href ?? location.href)
+      } catch {
+        warnings.push(`không đọc được stylesheet ${sheet.href ?? '(inline)'} (cross-origin) — font trong đó có thể bị thiếu`)
+      }
+    }
+    // FontFaces created by script carry no URL: match a fetched font file by name
+    const files = performance.getEntriesByType('resource').map((e) => e.name).filter((n) => /\.(ttf|otf|woff2?)(?:[?#]|$)/i.test(n))
+    const key = (s: string): string => s.toLowerCase().replace(/[\s_-]+/g, '')
+    document.fonts.forEach((f) => {
+      const fam = clean(f.family)
+      if (out.some((o) => o.family.toLowerCase() === fam.toLowerCase())) return
+      const file = files.find((n) => key(n.replace(/^.*\//, '').replace(/\.[^.]+(?:[?#].*)?$/, '')).startsWith(key(fam)))
+      add({ family: fam, weight: String(f.weight), style: f.style, urls: file ? [file] : [] })
+    })
+    return out
+  }
+
   const wanted = opts.engine ?? 'auto'
   if (wanted !== 'dom') {
     const game = findGame()
-    if (game) return { engine: 'phaser', width: VW, height: VH, elements: tidy(extractPhaser(game)), warnings }
+    if (game) {
+      const elements = tidy(extractPhaser(game))
+      return { engine: 'phaser', width: VW, height: VH, elements, warnings, fonts: webFonts() }
+    }
     if (wanted === 'phaser') warnings.push('không tìm thấy Phaser.Game trên trang; đọc DOM thay thế')
   }
-  return { engine: 'dom', width: VW, height: VH, elements: tidy(extractDom()), warnings }
+  const elements = tidy(extractDom())
+  return { engine: 'dom', width: VW, height: VH, elements, warnings, fonts: webFonts() }
 }

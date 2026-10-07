@@ -19,6 +19,8 @@ export interface ResolvedFont {
   requested: string
 }
 
+import { bumpFontEpoch } from '@/canvas/fontEpoch'
+
 let systemFonts: LocalFont[] | null = null
 let projectFonts: LocalFont[] = []
 let loading: Promise<LocalFont[]> | null = null
@@ -87,6 +89,8 @@ export async function loadProjectFonts(dir: string | null): Promise<LocalFont[]>
       console.warn('project font failed', e.name, err)
     }
   }
+  // text already on screen was drawn with a fallback for these families
+  if (projectFonts.length) bumpFontEpoch()
   return projectFonts
 }
 

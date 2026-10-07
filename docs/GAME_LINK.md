@@ -51,6 +51,7 @@ Việc cần làm:
 ```
 
 - `enter` chạy trong trang (dùng được `await`); `reload: true` nếu màn cần tải lại trang; `waitFor` là biểu thức JS được thăm dò tới khi true.
+- **Font**: mọi webfont game khai báo (`@font-face`, hoặc FontFace nạp bằng script và khớp được file theo tên) được chép vào `<root>/uiforge/fonts/<family>.<ext>` và app dùng ngay (không cần khởi động lại); export / Unity TMP lấy chúng như font project. Family có nhiều kiểu (bold/italic) chỉ lấy một file; font không lấy được hiện trong `fonts.warnings` — chép tay vào `uiforge/fonts/` với tên file = tên family.
 - Recipe được lưu ở `<root>/uiforge/capture.json`; lần sau chỉ cần `capture_game { "root": "…" }`.
 - **Tốc độ**: capture lại chỉ màn đang sửa bằng `only: ["gear"]` (1–2 s thay vì cả game); cửa sổ game được giữ sống ~4 phút giữa các lần gọi nên không phải load lại (`fresh: true` nếu muốn load mới); có `waitFor` chính xác thì đặt `waitMs: 100`, game load nhanh thì `settleMs: 600`. File art không đổi (mtime + size) được lấy từ cache, không đọc lại.
 - Kết quả trả về: số element mỗi màn, cây id (để viết `flows`), cảnh báo (ảnh không tìm thấy file nguồn → thêm `assetRoots`, ví dụ `["public"]`).

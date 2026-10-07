@@ -9,6 +9,7 @@ import { GAME_DIR, buildChangesMarkdown, currentLayout, diffGame, gameFrames, ga
 import { useEditor } from './editor'
 import { clearAssetCache, getAssetBytes, pngFromCanvas, putAssetBytes, setAssetProjectDir, sha256Hex } from './assets'
 import { openProject, saveProject } from './project'
+import { loadProjectFonts } from './fonts'
 
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp']
 
@@ -125,6 +126,8 @@ export async function pushGameDesign(design: GameDesign): Promise<PushResult> {
   const T0 = performance.now()
   const lap = (what: string): void => console.log(`[push] ${what} ${Math.round(performance.now() - T0)}ms`)
   const dir = await ensureGameProject(root, design.game.name)
+  // capture may just have written webfonts into <dir>/fonts
+  await loadProjectFonts(dir)
   lap('project')
   const abs = (p: string): string => (isAbsolute(p) ? p : `${root}/${p}`)
   const warnings: string[] = []

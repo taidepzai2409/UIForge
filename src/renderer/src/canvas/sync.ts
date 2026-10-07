@@ -4,6 +4,7 @@ import { isContainer } from '@/model/types'
 import { getTexture, getTextureSync } from '@/store/assets'
 import { rgbaToNumber } from '@/model/color'
 import { rasterizeText } from './textRaster'
+import { epochFamily, fontEpoch } from './fontEpoch'
 import { applyLayerEffects, hasEnabledEffects } from '@/psd/effects'
 import type { LayerEffectsInfo, PatternInfo } from 'ag-psd'
 
@@ -24,6 +25,8 @@ interface Entry {
   bg?: Graphics
   maskG?: Graphics
   textKey?: string
+  /** font epoch the text was last drawn with */
+  fontEpoch?: number
   texAsset?: string
   pendingTex?: string
   fxSprite?: Sprite
@@ -212,7 +215,7 @@ function updateEntry(scene: SceneView, e: Entry, n: SceneNode, assets: Record<st
       const styled = !!fx && hasEnabledEffects(fx)
       if (styled) {
         // Photoshop layer style on text: rasterize + run the same effects pipeline as images
-        const key = JSON.stringify([n.text, n.fontFamily, n.fontSize, n.fontWeight, n.color, n.align, n.lineHeight, n.width, n.italic, n.letterSpacing, n.uppercase, fx, patternInfos.length, globalLightAngle])
+        const key = JSON.stringify([n.text, n.fontFamily, n.fontSize, n.fontWeight, n.color, n.align, n.lineHeight, n.width, n.italic, n.letterSpacing, n.uppercase, fx, patternInfos.length, globalLightAngle, fontEpoch()])
         t.visible = false
         if (e.fxKey !== key) {
           e.fxKey = key
@@ -235,12 +238,12 @@ function updateEntry(scene: SceneView, e: Entry, n: SceneNode, assets: Record<st
       }
       if (e.fxSprite) e.fxSprite.visible = false
       t.visible = true
-      const key = JSON.stringify([n.text, n.fontFamily, n.fontSize, n.fontWeight, n.color, n.align, n.lineHeight, n.autoSize, n.width, n.italic, n.letterSpacing, n.uppercase])
+      const key = JSON.stringify([n.text, n.fontFamily, n.fontSize, n.fontWeight, n.color, n.align, n.lineHeight, n.autoSize, n.width, n.italic, n.letterSpacing, n.uppercase, fontEpoch()])
       if (e.textKey !== key) {
         e.textKey = key
         t.text = n.uppercase ? n.text.toUpperCase() : n.text
         t.style = {
-          fontFamily: [n.fontFamily, 'Arial', 'sans-serif'],
+          fontFamily: [n.fontFamily, 'Arial', 'sans-serif', epochFamily()],
           fontSize: n.fontSize,
           fontStyle: n.italic ? 'italic' : 'normal',
           letterSpacing: n.letterSpacing ?? 0,
@@ -282,13 +285,15 @@ export function syncScene(scene: SceneView, page: Page, assets: Record<string, A
         e = createEntry(n)
         scene.entries.set(n.id, e)
         changed = true
-      } else if (e.node !== n) {
+      } else if (e.node !== n || (n.type === 'text' && e.fontEpoch !== fontEpoch())) {
+        // text is also redrawn when a font arrived since it was drawn (node object unchanged)
         changed = true
       }
       visited.add(n.id)
       if (changed) {
         updateEntry(scene, e, n, assets)
         e.node = n
+        if (n.type === 'text') e.fontEpoch = fontEpoch()
       }
       if (parent.children[i] !== e.container) parent.addChildAt(e.container, Math.min(i, parent.children.length))
       if (isContainer(n)) {

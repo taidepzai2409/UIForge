@@ -4,7 +4,7 @@
 import { BrowserWindow, nativeImage } from 'electron'
 import { promises as fs, existsSync } from 'node:fs'
 import { join, relative, resolve, isAbsolute } from 'node:path'
-import { extractInPage, type ExtractOptions, type ExtractResult, type RawElement } from './extract'
+import { extractInPage, type ExtractOptions, type ExtractResult, type RawElement, type WebFont } from './extract'
 
 export interface CaptureScreen {
   id: string
@@ -69,6 +69,79 @@ export interface CaptureOutput {
     start?: string
   }
   report: { id: string; engine: string; elements: number; sources: number; snapshots: number; warnings: string[] }[]
+  /** webfonts copied into <root>/uiforge/fonts (file name = family, as the app's project fonts expect) */
+  fonts: { written: string[]; unchanged: string[]; warnings: string[] }
+}
+
+const FONT_EXT_ORDER = ['ttf', 'otf', 'woff', 'woff2']
+
+function fontExtOf(url: string): string | null {
+  try {
+    const m = /\.(ttf|otf|woff2?)$/i.exec(new URL(url).pathname)
+    return m ? m[1].toLowerCase() : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Copies the webfonts the captured texts use into <root>/uiforge/fonts/<family>.<ext>: one file per family
+ * (the regular face when there are several), taken from the game folder when the URL maps to a file,
+ * else downloaded from the dev server.
+ */
+async function copyWebFonts(faces: WebFont[], root: string, assetRoots: string[]): Promise<CaptureOutput['fonts']> {
+  const res: CaptureOutput['fonts'] = { written: [], unchanged: [], warnings: [] }
+  const byFamily = new Map<string, WebFont[]>()
+  for (const f of faces) {
+    const k = f.family.toLowerCase()
+    const list = byFamily.get(k) ?? []
+    if (!list.some((x) => x.weight === f.weight && x.style === f.style && x.urls.join() === f.urls.join())) list.push(f)
+    byFamily.set(k, list)
+  }
+  const dir = join(root, 'uiforge', 'fonts')
+  for (const list of byFamily.values()) {
+    const family = list[0].family
+    if (/[<>:"/\\|?*]/.test(family)) {
+      res.warnings.push(`font "${family}": tên có ký tự không dùng được làm tên file, bỏ qua`)
+      continue
+    }
+    const regular = list.find((f) => /^(400|normal)$/.test(f.weight) && f.style === 'normal') ?? list[0]
+    if (list.length > 1) res.warnings.push(`font "${family}" có ${list.length} kiểu (weight/style); chỉ lấy một file (${regular.weight} ${regular.style}), kiểu còn lại app tự giả lập`)
+    const urls = regular.urls.filter((u) => fontExtOf(u)).sort((a, b) => FONT_EXT_ORDER.indexOf(fontExtOf(a)!) - FONT_EXT_ORDER.indexOf(fontExtOf(b)!))
+    let bytes: Buffer | null = null
+    let ext = ''
+    for (const u of urls) {
+      try {
+        const local = resolveAsset(u, u, root, assetRoots)
+        if (local) bytes = await fs.readFile(join(root, local))
+        else if (/^https?:/.test(u)) {
+          const r = await fetch(u)
+          if (r.ok) bytes = Buffer.from(await r.arrayBuffer())
+        }
+        if (bytes) {
+          ext = fontExtOf(u)!
+          break
+        }
+      } catch {
+        /* next url */
+      }
+    }
+    if (!bytes) {
+      res.warnings.push(`font "${family}": không lấy được file${urls.length ? ` (${urls[0]})` : ' (không có URL nguồn)'} — chép tay vào uiforge/fonts/${family}.ttf`)
+      continue
+    }
+    await fs.mkdir(dir, { recursive: true })
+    // the family name is the file name: drop other files of the same family first
+    for (const e of await fs.readdir(dir)) if (e.replace(/\.[^.]+$/, '').toLowerCase() === family.toLowerCase() && e !== `${family}.${ext}`) await fs.rm(join(dir, e), { force: true })
+    const file = join(dir, `${family}.${ext}`)
+    const old = existsSync(file) ? await fs.readFile(file) : null
+    if (old && old.equals(bytes)) res.unchanged.push(`${family}.${ext}`)
+    else {
+      await fs.writeFile(file, bytes)
+      res.written.push(`${family}.${ext}`)
+    }
+  }
+  return res
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -282,7 +355,8 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
   wc.on('console-message', (ev) => {
     if (ev.level === 'error' && consoleErrors.length < 5) consoleErrors.push(ev.message.slice(0, 200))
   })
-  const out: CaptureOutput = { design: { schema: 'uiforge-game-design', version: 1, game: { name: recipe.name, root: toPosix(root), engine: recipe.engine, devUrl: recipe.url }, screens: [], flows: recipe.flows, start: recipe.start }, report: [] }
+  const faces: WebFont[] = []
+  const out: CaptureOutput = { fonts: { written: [], unchanged: [], warnings: [] }, design: { schema: 'uiforge-game-design', version: 1, game: { name: recipe.name, root: toPosix(root), engine: recipe.engine, devUrl: recipe.url }, screens: [], flows: recipe.flows, start: recipe.start }, report: [] }
   try {
     let loaded = !!reuse
     for (const screen of recipe.screens) {
@@ -336,6 +410,7 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
         }
       }
       warnings.push(...extracted.warnings)
+      faces.push(...(extracted.fonts ?? []))
       mark('extract')
 
       // excluded things (a popup left open, the game world…) stay out of the shots
@@ -412,6 +487,7 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
       console.log(`[capture] ${screen.id}: ${lap.join(', ')}`)
       out.report.push({ id: screen.id, engine: extracted.engine, ...countElements(elements), warnings })
     }
+    out.fonts = await copyWebFonts(faces, root, assetRoots)
     if (consoleErrors.length && out.report[0]) out.report[0].warnings.push(`console error của game: ${consoleErrors.join(' | ')}`)
   } finally {
     wc.removeAllListeners('console-message')

@@ -252,7 +252,7 @@ async function applyOps(ops: Op[]): Promise<string[]> {
 }
 
 // ----------------------------------------------------------------- server
-const server = new McpServer({ name: 'uiforge', version: '0.3.1' })
+const server = new McpServer({ name: 'uiforge', version: '0.3.2' })
 
 server.registerTool(
   'project_info',
@@ -943,13 +943,13 @@ server.registerTool(
     await mkdir(gameDir(root), { recursive: true })
     if (!dryRun) await writeFile(recipeFile, JSON.stringify(recipe, null, 2))
     const run = { ...recipe, ...(fresh ? { fresh: true } : {}), ...(only?.length ? { screens: (recipe.screens as { id: string }[]).filter((s) => only.includes(s.id)) } : {}) }
-    const cap = await bridge<{ design: GameDesign; report: { id: string; engine: string; elements: number; sources: number; snapshots: number; warnings: string[] }[] }>('captureGame', run)
+    const cap = await bridge<{ design: GameDesign; report: { id: string; engine: string; elements: number; sources: number; snapshots: number; warnings: string[] }[]; fonts?: { written: string[]; unchanged: string[]; warnings: string[] } }>('captureGame', run)
     await writeFile(join(gameDir(root), 'design.json'), JSON.stringify(cap.design, null, 2))
     const trees = cap.design.screens.map((s) => `## ${s.id} (${s.width}×${s.height})\n${elementTree(s.elements).join('\n')}`).join('\n\n')
-    if (dryRun) return { content: [{ type: 'text', text: JSON.stringify({ dryRun: true, screens: cap.report }, null, 2) }, { type: 'text', text: trees }] }
+    if (dryRun) return { content: [{ type: 'text', text: JSON.stringify({ dryRun: true, screens: cap.report, fonts: cap.fonts }, null, 2) }, { type: 'text', text: trees }] }
     const pushed = await bridge<Record<string, unknown>>('pushGameDesign', { design: cap.design })
     projectDir = gameDir(root)
-    return { content: [{ type: 'text', text: JSON.stringify({ captured: cap.report, pushed, recipe: recipeFile, hint: 'render_frame {frame} để xem app dựng lại; get_game_changes {root} để xem thứ còn lệch so với thiết kế.' }, null, 2) }, { type: 'text', text: trees }] }
+    return { content: [{ type: 'text', text: JSON.stringify({ captured: cap.report, fonts: cap.fonts, pushed, recipe: recipeFile, hint: 'render_frame {frame} để xem app dựng lại; get_game_changes {root} để xem thứ còn lệch so với thiết kế.' }, null, 2) }, { type: 'text', text: trees }] }
   }
 )
 
