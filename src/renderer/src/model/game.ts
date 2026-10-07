@@ -555,6 +555,18 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
     }
     frame.fill = { color: hexToRgba((screen.background ?? '#1e1e24').slice(0, 7)) ?? frame.fill.color, visible: true }
     if (screen.kind) setMeta(frame, 'gameKind', screen.kind)
+    // the Components frame grows with its masters: keep it clear of the screens, on their left
+    if (screen.id === COMPONENTS_SCREEN) {
+      const others = page.children.filter((c) => c !== frame)
+      if (others.length) {
+        const f = frame
+        const overlaps = others.some((c) => f.x < c.x + c.width + 120 && f.x + f.width + 120 > c.x && f.y < c.y + c.height && f.y + f.height > c.y)
+        if (overlaps) {
+          f.x = Math.min(...others.map((c) => c.x)) - f.width - 240
+          f.y = Math.min(...others.map((c) => c.y))
+        }
+      }
+    }
 
     // reference layer (the game's own rendering), always at the bottom
     const shot = res.screenshot(screen.id)
