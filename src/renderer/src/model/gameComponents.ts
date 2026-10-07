@@ -309,6 +309,14 @@ ${f.el.id}`] === name)
           return { c: (t.x + t.width / 2 - f.el.x) / w, r: (t.x + t.width - f.el.x) / w }
         })
         if (rel.some((r) => !r)) return
+        // only single-line labels whose text differs between occurrences need a wider box; a wrapped text
+        // keeps the width the game wraps it at
+        const texts = list.map((f) => leaves(f.el)[i]?.text ?? '')
+        if (new Set(texts).size < 2) return
+        if (list.some((f) => {
+          const t = leaves(f.el)[i]
+          return !t || (t.text ?? '').includes('\n') || t.height > (t.fontSize ?? t.height) * 1.6
+        })) return
         const cs = rel.map((r) => r!.c)
         const rs = rel.map((r) => r!.r)
         const spread = (v: number[]): number => Math.max(...v) - Math.min(...v)
@@ -318,11 +326,13 @@ ${f.el.id}`] === name)
           ml.align = 'center'
           ml.x = master.x + c * master.width - half
           ml.width = half * 2
+          ml.note = [ml.note, 'padded'].filter(Boolean).join('; ')
         } else if (spread(rs) < 0.04) {
           const r = rs.reduce((a, b) => a + b, 0) / rs.length
           ml.align = 'right'
           ml.width = r * master.width
           ml.x = master.x
+          ml.note = [ml.note, 'padded'].filter(Boolean).join('; ')
         }
       })
     }

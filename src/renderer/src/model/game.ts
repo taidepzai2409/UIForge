@@ -11,7 +11,7 @@ import { createFrame, createGroup, createImage, createInstance, createNineSlice,
 import { hexToRgba, rgbaToHex } from './color'
 import { DEFAULT_OVERLAY, defaultsForAction, normalizeConnection } from './flows'
 import { COMPONENTS_SCREEN, type GameComponentRule } from './gameComponents'
-import { findMaster } from './instances'
+import { findMaster, instanceChildId } from './instances'
 
 export const GAME_PAGE_NAME = 'Game UI'
 export const GAME_DIR = 'uiforge'
@@ -179,6 +179,17 @@ const EPS = 0.5
 
 function round(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+/** An instance that was not resized takes its master's size: only its position is its own. */
+function sameNodeRect(n: SceneNode, a: Rect, b: Rect): boolean {
+  if (n.type === 'instance') return Math.abs(a.x - b.x) <= EPS && Math.abs(a.y - b.y) <= EPS && (!n.size || (closeSize(a.width, b.width) && closeSize(a.height, b.height)))
+  return sameRect(a, b)
+}
+
+/** Sizes that differ by a counter's digits (≤ 2 px or ≤ 2 %) are the same size for a component. */
+function closeSize(a: number, b: number): boolean {
+  return Math.abs(a - b) <= Math.max(2, 0.02 * Math.max(Math.abs(a), Math.abs(b)))
 }
 
 function sameRect(a: Rect, b: Rect): boolean {
@@ -425,7 +436,7 @@ function touched(doc: DesignDocument, w: Walked, base: GameElementBase | undefin
     const st = instanceState(doc, n)
     if (st.component !== base.component || canonical(st.overrides) !== canonical(base.overrides)) return true
   }
-  if (n.type !== 'group' && !sameRect(w.rect, base.rect)) return true
+  if (n.type !== 'group' && !sameNodeRect(n, w.rect, base.rect)) return true
   if ((n.type === 'image' || n.type === 'nineslice') && n.assetId !== base.assetId) return true
   if (n.type === 'text' && (n.text !== base.text || (base.fontSize !== undefined && n.fontSize !== base.fontSize) || (base.color !== undefined && rgbaToHex(n.color) !== base.color))) return true
   if (n.type === 'rect' && base.fill !== undefined && (n.fill.visible ? rgbaToHex(n.fill.color) : null) !== base.fill) return true
@@ -441,7 +452,23 @@ function flowFromKey(c: Connection, keyOfNode: Map<NodeId, string>, screenOfFram
 }
 
 /** Maps of the game nodes on a page: node id → "screen/element" (or "screen" for the frame) and frame id → screen id. */
-function gameKeys(page: Page): { keyOfNode: Map<NodeId, string>; screenOfFrame: Map<NodeId, string> } {
+/**
+ * Parts of an instance (copies of its master's elements), with their deterministic ids — available even
+ * before the instance's children are expanded (inside a merge draft).
+ */
+function instanceParts(doc: DesignDocument, inst: InstanceNode): { id: NodeId; name: string; gameId?: string }[] {
+  const m = findMaster(doc, inst.componentId)
+  if (!m) return []
+  const out: { id: NodeId; name: string; gameId?: string }[] = []
+  const visit = (n: SceneNode): void => {
+    out.push({ id: instanceChildId(inst.id, n.id), name: n.name, gameId: gameIdOf(n) })
+    if (isContainer(n) && n.type !== 'instance') n.children.forEach(visit)
+  }
+  m.node.children.forEach(visit)
+  return out
+}
+
+function gameKeys(doc: DesignDocument, page: Page): { keyOfNode: Map<NodeId, string>; screenOfFrame: Map<NodeId, string> } {
   const keyOfNode = new Map<NodeId, string>()
   const screenOfFrame = new Map<NodeId, string>()
   for (const c of page.children) {
@@ -449,7 +476,12 @@ function gameKeys(page: Page): { keyOfNode: Map<NodeId, string>; screenOfFrame: 
     if (c.type !== 'frame' || !sid) continue
     screenOfFrame.set(c.id, sid)
     keyOfNode.set(c.id, sid)
-    for (const w of walkFrame(c)) keyOfNode.set(w.node.id, `${sid}/${w.primary ? w.gameId : '~' + w.node.name}`)
+    for (const w of walkFrame(c)) {
+      const key = `${sid}/${w.primary ? w.gameId : '~' + w.node.name}`
+      keyOfNode.set(w.node.id, key)
+      // flows may start on a part of an instance (a button inside a shared HUD)
+      if (w.node.type === 'instance') for (const p of instanceParts(doc, w.node)) keyOfNode.set(p.id, `${key} › ${p.gameId ? p.gameId.slice(p.gameId.indexOf('/') + 1) : p.name}`)
+    }
   }
   return { keyOfNode, screenOfFrame }
 }
@@ -550,6 +582,7 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
     const seenIds = new Set<string>()
 
     const place = (els: GameElement[], container: ContainerNode | null, cx: number, cy: number, parentGameId?: string): void => {
+      const placed: SceneNode[] = []
       for (let el of els) {
         if (seenIds.has(el.id)) {
           report.warnings.push(`${screen.id}: element id trùng "${el.id}" (bỏ qua bản sau)`)
@@ -558,12 +591,13 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
         seenIds.add(el.id)
         stat.elements++
         // single-line text: a little room on the right so the app's font metrics never wrap it
-        if (el.type === 'text' && el.text && !el.text.includes('\n') && !el.note?.includes('padded') && screen.id !== COMPONENTS_SCREEN) {
+        if (el.type === 'text' && el.text && !el.text.includes('\n') && !el.note?.includes('padded')) {
           const pad = Math.round(el.width * 0.08 + 4)
           el = { ...el, width: el.width + pad, x: el.align === 'center' ? el.x - pad / 2 : el.align === 'right' ? el.x - pad : el.x, note: [el.note, 'padded'].filter(Boolean).join('; ') }
         }
         if (el.component && masters.has(el.component)) {
-          placeInstance(el, container, cx, cy, parentGameId)
+          const inst = placeInstance(el, container, cx, cy, parentGameId)
+          if (inst) placed.push(inst)
           continue
         }
         const wantsArt = el.type === 'image' || el.type === 'nineslice'
@@ -630,6 +664,17 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
         }
         if (el.children?.length) place(el.children, node && isContainer(node) ? node : null, nx, ny, el.id)
         if (el.master && node && node.type === 'group') markMaster(node, el.master, !w)
+        if (node) placed.push(node)
+      }
+      // paint order follows the game (a z-index can move a bar above a panel between captures);
+      // nodes the user added in the app keep their slots
+      if (container && placed.length > 1) {
+        const list = container.children
+        const mine = new Set(placed)
+        const slots: number[] = []
+        list.forEach((n, i) => mine.has(n) && slots.push(i))
+        const ordered = placed.filter((n) => list.includes(n))
+        if (ordered.length === slots.length) slots.forEach((slot, k) => (list[slot] = ordered[k]))
       }
     }
 
@@ -642,7 +687,7 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
     }
 
     /** an occurrence of a component: an instance of its master, overrides from what differs */
-    const placeInstance = (el: GameElement, container: ContainerNode | null, cx: number, cy: number, parentGameId?: string): void => {
+    const placeInstance = (el: GameElement, container: ContainerNode | null, cx: number, cy: number, parentGameId?: string): SceneNode | null => {
       const m = masters.get(el.component!)!
       const ids = masterIds(m)
       const byGame = new Map<string, SceneNode>()
@@ -684,7 +729,7 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
       // master parts this occurrence does not have
       for (const [gid, mn] of byGame) if (!mapped.has(gid) && mn.visible && !(isContainer(mn) && mn.type !== 'instance')) overrides[gid] = { visible: false }
 
-      const resized = Math.abs(el.width - m.width) > 1 || Math.abs(el.height - m.height) > 1
+      const resized = !closeSize(el.width, m.width) || !closeSize(el.height, m.height)
       const width = resized ? el.width : m.width
       const height = resized ? el.height : m.height
       const base: GameElementBase = { ...baseFromElement({ ...el, type: 'group', children: undefined }, undefined, parentGameId), rect: { x: round(el.x), y: round(el.y), width: round(width), height: round(height) }, component: el.component }
@@ -719,12 +764,13 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
           apply(inst, el.x - cx, el.y - cy)
           container.children.push(inst)
           stat.added++
+          return inst
         }
-        return
+        return null
       }
       if (touched(doc, w, old)) {
         stat.kept++
-        return
+        return w.node
       }
       const px = w.rect.x - w.node.x
       const py = w.rect.y - w.node.y
@@ -735,8 +781,12 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
         apply(inst, el.x - px, el.y - py)
         const list = w.parent.children
         list[list.indexOf(w.node)] = inst
-      } else apply(w.node, el.x - px, el.y - py)
+        stat.updated++
+        return inst
+      }
+      apply(w.node, el.x - px, el.y - py)
       stat.updated++
+      return w.node
     }
 
     place(screen.elements, frame, 0, 0)
@@ -775,12 +825,20 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
       const want = slash > 0 && frames.has(ref.slice(0, slash)) ? ref.slice(slash + 1) : ref
       if (slash < 0 && frames.has(ref)) return frames.get(ref)!.id
       let loose: NodeId | null = null
+      let inPart: NodeId | null = null
       for (const f of scope)
         for (const w of walkFrame(f)) {
+          // a part of an instance: the game element was folded into a shared component
+          if (w.node.type === 'instance' && !inPart) {
+            const tail = w.gameId && want.startsWith(w.gameId + '/') ? want.slice(w.gameId.length + 1) : want
+            const hit = instanceParts(doc, w.node).find((p) => p.name === tail || p.name === want || (!!p.gameId && (p.gameId.endsWith('/' + tail) || p.gameId.endsWith('/' + want))))
+            if (hit) inPart = hit.id
+          }
           if (!w.primary) continue
           if (w.gameId === want) return w.node.id
           if (!loose && (w.node.name === want || w.gameId!.endsWith('/' + want) || w.gameId!.endsWith(want))) loose = w.node.id
         }
+      if (!loose && inPart) return inPart
       // a part of a component instance (or an element the game nested deeper): the closest element above it
       if (!loose && slash > 0 && ref.lastIndexOf('/') > slash) return resolveFrom(ref.slice(0, ref.lastIndexOf('/')))
       return loose
@@ -815,7 +873,7 @@ export function mergeGameDesign(doc: DesignDocument, design: GameDesign, res: Re
     const start = design.start ? frames.get(design.start) : undefined
     if (start) page.startFrameId = start.id
     else if (!page.startFrameId && design.screens[0]) page.startFrameId = frames.get(design.screens[0].id)?.id
-    const { keyOfNode, screenOfFrame } = gameKeys(page)
+    const { keyOfNode, screenOfFrame } = gameKeys(doc, page)
     link.flows = page.connections.map((c) => flowFromKey(c, keyOfNode, screenOfFrame)).filter((k): k is string => !!k)
   }
   return report
@@ -955,7 +1013,7 @@ export function diffGame(doc: DesignDocument): GameChanges {
         }
       }
       // rect (groups are derived from their children; an instance has its own box)
-      if ((type !== 'group' || n.type === 'instance') && !sameRect(w.rect, b.rect)) {
+      if ((type !== 'group' || n.type === 'instance') && !sameNodeRect(n, w.rect, b.rect)) {
         const d = { dx: round(w.rect.x - b.rect.x), dy: round(w.rect.y - b.rect.y), dw: round(w.rect.width - b.rect.width), dh: round(w.rect.height - b.rect.height) }
         delta.set(id, d)
         // a master's part: relative to the component's top-left, which is what the widget code uses
@@ -1064,7 +1122,7 @@ export function diffGame(doc: DesignDocument): GameChanges {
   if (link.flows) {
     const current: string[] = []
     for (const page of doc.pages) {
-      const { keyOfNode, screenOfFrame } = gameKeys(page)
+      const { keyOfNode, screenOfFrame } = gameKeys(doc, page)
       for (const c of page.connections) {
         const k = flowFromKey(c, keyOfNode, screenOfFrame)
         if (k) current.push(k)
@@ -1188,7 +1246,7 @@ export function rebaselineGame(doc: DesignDocument): number {
     link.screens[screenId] = { name: frame.name, width: frame.width, height: frame.height, kind: old?.kind, code: old?.code, elements }
   }
   for (const page of doc.pages) {
-    const { keyOfNode, screenOfFrame } = gameKeys(page)
+    const { keyOfNode, screenOfFrame } = gameKeys(doc, page)
     const keys = page.connections.map((c) => flowFromKey(c, keyOfNode, screenOfFrame)).filter((k): k is string => !!k)
     if (keys.length || link.flows) link.flows = keys
   }

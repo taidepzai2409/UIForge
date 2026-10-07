@@ -447,7 +447,9 @@ export function extractInPage(opts: ExtractOptions): ExtractResult {
       const parent = el.parentElement
       return `${parent && parent !== document.body ? selectorOf(parent) + ' > ' : ''}${el.tagName.toLowerCase()}${cls}`
     }
-    const visit = (el: Element, alpha: number, parentId: string, scope: object, into: RawElement[]): void => {
+    /** visible area left by ancestors with overflow other than visible (scroll lists, masks) */
+    type Clip = { x0: number; y0: number; x1: number; y1: number }
+    const visit = (el: Element, alpha: number, parentId: string, scope: object, into: RawElement[], clip: Clip): void => {
       if (count >= max || SKIP.has(el.tagName)) return
       const cs = getComputedStyle(el)
       if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') return
@@ -465,8 +467,14 @@ export function extractInPage(opts: ExtractOptions): ExtractResult {
         return
       }
       const r = el.getBoundingClientRect()
+      // fixed elements escape their ancestors' clipping; anything else wholly outside it is not seen
+      const myClip: Clip = cs.position === 'fixed' ? { x0: 0, y0: 0, x1: VW, y1: VH } : clip
+      const inClip = (x: number, y: number, w: number, h: number): boolean => x < myClip.x1 && y < myClip.y1 && x + w > myClip.x0 && y + h > myClip.y0
+      if (r.width > 0 && r.height > 0 && !inClip(r.left, r.top, r.width, r.height)) return
+      const clipsKids = cs.overflowX !== 'visible' || cs.overflowY !== 'visible'
+      const kidClip: Clip = clipsKids ? { x0: Math.max(myClip.x0, r.left), y0: Math.max(myClip.y0, r.top), x1: Math.min(myClip.x1, r.right), y1: Math.min(myClip.y1, r.bottom) } : myClip
       const box = { x: r2(r.left), y: r2(r.top), width: r2(r.width), height: r2(r.height) }
-      const visible = onScreen(r.left, r.top, r.width, r.height)
+      const visible = onScreen(r.left, r.top, r.width, r.height) && inClip(r.left, r.top, r.width, r.height)
       const code = `css: ${selectorOf(el)}`
       const interactive = el.tagName === 'BUTTON' || el.tagName === 'A' || el.tagName === 'INPUT' || cs.cursor === 'pointer' || typeof html.onclick === 'function'
       const parts: RawElement[] = []
@@ -528,7 +536,19 @@ export function extractInPage(opts: ExtractOptions): ExtractResult {
 
       const kids: RawElement[] = []
       if (!leafOnly) {
-        for (const node of Array.from(el.childNodes)) {
+        // paint order: siblings with a z-index (positioned) are stacked by it, then document order — the
+        // order the browser draws them in, so a z-indexed bar stays above a later full-screen panel
+        const zOf = (n: ChildNode): number => {
+          if (n.nodeType !== 1) return 0
+          const c = getComputedStyle(n as Element)
+          const z = parseInt(c.zIndex, 10)
+          return c.position !== 'static' && Number.isFinite(z) ? z : 0
+        }
+        const ordered = Array.from(el.childNodes)
+          .map((n, i) => ({ n, i, z: zOf(n) }))
+          .sort((p, q) => p.z - q.z || p.i - q.i)
+          .map((x) => x.n)
+        for (const node of ordered) {
           if (node.nodeType === 3) {
             const raw = (node.textContent ?? '').replace(/\s+/g, ' ').trim()
             if (!raw) continue
@@ -536,11 +556,12 @@ export function extractInPage(opts: ExtractOptions): ExtractResult {
             range.selectNodeContents(node)
             const tr = range.getBoundingClientRect()
             if (!onScreen(tr.left, tr.top, tr.width, tr.height)) continue
+            if (!(tr.left < kidClip.x1 && tr.top < kidClip.y1 && tr.right > kidClip.x0 && tr.bottom > kidClip.y0)) continue
             const col = parseColor(cs.color)
             const ta = cs.textAlign
             const text = cs.textTransform === 'uppercase' ? raw.toUpperCase() : raw
             kids.push({ id: '', name: `txt_${raw.slice(0, 24)}`, type: 'text', x: r2(tr.left), y: r2(tr.top), width: r2(tr.width), height: r2(tr.height), text, fontSize: r2(parseFloat(cs.fontSize)), fontFamily: cs.fontFamily.split(',')[0].replace(/["']/g, '').trim(), fontWeight: parseInt(cs.fontWeight, 10) || 400, color: col?.hex ?? '#000000', align: ta === 'center' ? 'center' : ta === 'right' || ta === 'end' ? 'right' : 'left' })
-          } else if (node.nodeType === 1) visit(node as Element, a, id, el, kids)
+          } else if (node.nodeType === 1) visit(node as Element, a, id, el, kids, kidClip)
         }
         if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
           const v = (el as HTMLInputElement).value || (el as HTMLInputElement).placeholder
@@ -596,7 +617,7 @@ export function extractInPage(opts: ExtractOptions): ExtractResult {
     }
     const out: RawElement[] = []
     const top = {}
-    for (const root of roots) visit(root, 1, '', top, out)
+    for (const root of roots) visit(root, 1, '', top, out, { x0: 0, y0: 0, x1: VW, y1: VH })
     if (count >= max) warnings.push(`quá ${max} element: phần còn lại bị bỏ (dùng root / exclude để lọc)`)
     return out
   }

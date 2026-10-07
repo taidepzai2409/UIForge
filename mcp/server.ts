@@ -252,7 +252,7 @@ async function applyOps(ops: Op[]): Promise<string[]> {
 }
 
 // ----------------------------------------------------------------- server
-const server = new McpServer({ name: 'uiforge', version: '0.4.0' })
+const server = new McpServer({ name: 'uiforge', version: '0.4.1' })
 
 server.registerTool(
   'project_info',
