@@ -1,10 +1,10 @@
 // Font epoch: bumped whenever a font becomes available after text was already drawn (project fonts
 // loaded, a game's webfonts captured, document.fonts finishing a load).
 //
-// Chrome's canvas keeps the face it resolved for a CSS font string, so text drawn with a fallback
-// keeps the fallback even after the real font is added. Every font string the app hands to a canvas
-// therefore ends with a family that names the epoch (it never exists, so it never matches): a new
-// epoch means a new string, a fresh lookup, and new Pixi text textures.
+// Text whose node is unchanged is never redrawn (scene sync compares node objects and text keys), so text
+// drawn with a fallback kept it after the real font arrived. The epoch is part of every text key, and
+// every font string the app hands to a canvas ends with a family naming the epoch (never installed, so
+// it never matches): a new epoch means new keys, fresh font lookups and new Pixi text textures.
 import { CanvasTextMetrics } from 'pixi.js'
 
 let epoch = 0
