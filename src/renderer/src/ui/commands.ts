@@ -6,6 +6,7 @@ import { getEntry } from '@/model/nodes'
 import { isContainer } from '@/model/types'
 import { alignSelection, copySelection, cutSelection, pasteClipboard, requestRename, toggleNineSlice } from './actions'
 import { zoomBy, zoomTo, zoomToFitAll, zoomToSelection } from './zoom'
+import { togglePixelSnap } from '@/canvas/pixelSnap'
 
 export interface Command {
   id: string
@@ -82,6 +83,7 @@ export function eventToBinding(e: KeyboardEvent): string {
   else if (code === 'Comma') key = ','
   else if (code === 'Period') key = '.'
   else if (code === 'Slash') key = '/'
+  else if (code === 'Quote') key = "'"
   else if (code === 'Backquote') key = '`'
   else key = KEY_NAMES[e.key.toLowerCase()] ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key)
   if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return parts.join('+')
@@ -212,7 +214,8 @@ export const COMMANDS: Command[] = [
   { id: 'view.zoom100', label: 'Zoom 100%', group: 'View', defaultKeys: ['Ctrl+0'], run: () => zoomTo(1) },
   { id: 'view.fitAll', label: 'Zoom to fit', group: 'View', defaultKeys: ['Shift+1'], run: zoomToFitAll },
   { id: 'view.fitSelection', label: 'Zoom to selection', group: 'View', defaultKeys: ['Shift+2'], run: zoomToSelection },
-  { id: 'view.rulers', label: 'Toggle rulers', group: 'View', defaultKeys: ['Shift+R'], run: () => s().setShowRulers(!s().showRulers) }
+  { id: 'view.rulers', label: 'Toggle rulers', group: 'View', defaultKeys: ['Shift+R'], run: () => s().setShowRulers(!s().showRulers) },
+  { id: 'view.pixelSnap', label: 'Snap to pixel (bật/tắt)', group: 'View', defaultKeys: ["Ctrl+Shift+'"], run: () => s().setStatus(togglePixelSnap() ? 'Snap to pixel: BẬT' : 'Snap to pixel: TẮT') }
 ]
 
 /** Finds the command bound to a key event, or null. */

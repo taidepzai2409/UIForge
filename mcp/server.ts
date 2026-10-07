@@ -252,7 +252,7 @@ async function applyOps(ops: Op[]): Promise<string[]> {
 }
 
 // ----------------------------------------------------------------- server
-const server = new McpServer({ name: 'uiforge', version: '0.3.2' })
+const server = new McpServer({ name: 'uiforge', version: '0.4.0' })
 
 server.registerTool(
   'project_info',
@@ -927,6 +927,8 @@ server.registerTool(
       screens: z.array(captureScreen).optional(),
       flows: z.array(z.record(z.string(), z.unknown())).optional().describe('[{from: "màn/element", to: "màn", action?, trigger?}]'),
       start: z.string().optional(),
+      components: z.array(z.object({ name: z.string(), match: z.string().describe('regex theo id/tên element (group)'), code: z.string().optional().describe('chỗ code dựng widget này, vd "src/ui/widgets.ts button()"') })).optional().describe('widget dùng chung của game → component (master + instance). Xem game_guide mục Component'),
+      autoComponents: z.boolean().optional().describe('tự nhận các group lặp lại (cùng cấu trúc + art) làm component; mặc định true'),
       only: z.array(z.string()).optional().describe('chỉ capture các màn có id này (màn khác trong app giữ nguyên) — NHANH, dùng khi capture lại'),
       fresh: z.boolean().optional().describe('mở cửa sổ game mới thay vì dùng lại cửa sổ đang sống từ lần capture trước'),
       dryRun: z.boolean().optional()

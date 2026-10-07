@@ -12,6 +12,7 @@ import { actionLabel, ownerFrameId, transitionLabel, triggerLabel } from '@/mode
 import { canvasPalette, useTheme } from '@/store/theme'
 import { toScreen, toWorld, zoomAt } from './viewMath'
 import { onFontEpoch } from './fontEpoch'
+import { pixelSnapOn } from './pixelSnap'
 import {
   HANDLES,
   HANDLE_SIZE,
@@ -40,7 +41,7 @@ type Drag =
   | { kind: 'pan'; sx: number; sy: number; vx: number; vy: number }
   | { kind: 'move'; sx: number; sy: number; ids: NodeId[]; orig: Map<NodeId, { x: number; y: number }>; started: boolean; bboxOrig: Rect; clickedId: NodeId; shift: boolean }
   | { kind: 'marquee'; wx: number; wy: number; cx: number; cy: number; additive: boolean; base: NodeId[] }
-  | { kind: 'resize'; sx: number; sy: number; id: NodeId; orig: Rect; handle: HandleId; origChildren: SceneNode[] | null; started: boolean }
+  | { kind: 'resize'; sx: number; sy: number; id: NodeId; orig: Rect; handle: HandleId; origChildren: SceneNode[] | null; started: boolean; parentAbs: { x: number; y: number } }
   | { kind: 'create'; sx: number; sy: number; wx: number; wy: number; type: 'frame' | 'rect'; id: NodeId | null; parentId: NodeId | null; parentAbs: { x: number; y: number } }
   | { kind: 'connect'; fromId: NodeId; sx: number; sy: number; cx: number; cy: number; targetId: NodeId | null; alt: boolean }
   | { kind: 'slice'; id: NodeId; edge: SliceEdge; started: boolean }
@@ -503,7 +504,9 @@ class ViewportController {
         const h = handleAt(bbox, sx, sy)
         if (h) {
           const origChildren = n.type === 'group' ? (JSON.parse(JSON.stringify(n.children)) as SceneNode[]) : null
-          this.drag = { kind: 'resize', sx, sy, id: n.id, orig: { x: n.x, y: n.y, width: n.width, height: n.height }, handle: h.id, origChildren, started: false }
+          const abs = absRect(page, n.id)
+          const parentAbs = abs ? { x: abs.x - n.x, y: abs.y - n.y } : { x: 0, y: 0 }
+          this.drag = { kind: 'resize', sx, sy, id: n.id, orig: { x: n.x, y: n.y, width: n.width, height: n.height }, handle: h.id, origChildren, started: false, parentAbs }
           return
         }
       }
@@ -578,6 +581,12 @@ class ViewportController {
           dx += snap.dx
           dy += snap.dy
           this.guides = { xs: snap.guidesX, ys: snap.guidesY }
+          // snap to pixel (like Photoshop): the selection's top-left always lands on a whole page pixel,
+          // also after snapping to an edge / centre that sits on a half pixel
+          if (pixelSnapOn()) {
+            dx = Math.round(d.bboxOrig.x + dx) - d.bboxOrig.x
+            dy = Math.round(d.bboxOrig.y + dy) - d.bboxOrig.y
+          }
         }
         s.updatePage(
           (pg) => {
@@ -614,6 +623,19 @@ class ViewportController {
         const dx = (sx - d.sx) / v.zoom
         const dy = (sy - d.sy) / v.zoom
         const nr = resizeRect(d.orig, d.handle, dx, dy, e.shiftKey, e.altKey)
+        if (pixelSnapOn()) {
+          // edges on whole page pixels (absolute), like Photoshop's snap to pixel
+          const px = d.parentAbs.x
+          const py = d.parentAbs.y
+          const x0 = Math.round(px + nr.x)
+          const y0 = Math.round(py + nr.y)
+          const x1 = Math.round(px + nr.x + nr.width)
+          const y1 = Math.round(py + nr.y + nr.height)
+          nr.x = x0 - px
+          nr.y = y0 - py
+          nr.width = Math.max(1, x1 - x0)
+          nr.height = Math.max(1, y1 - y0)
+        }
         s.updatePage(
           (pg) => {
             const l = locate(pg, d.id)
@@ -628,6 +650,7 @@ class ViewportController {
               scaleChildren(n, nr.width / d.orig.width, nr.height / d.orig.height)
             }
             if (n.type === 'text') n.autoSize = false
+            if (n.type === 'instance') n.size = { width: n.width, height: n.height }
           },
           { history: false }
         )

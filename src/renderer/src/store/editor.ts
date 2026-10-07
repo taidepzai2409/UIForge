@@ -278,12 +278,13 @@ export const useEditor = create<EditorState>((set, get) => {
         if (!l) return
         const fromInstance = (l.node.meta as { fromInstance?: string; instanceOf?: string } | undefined)?.fromInstance
         if (fromInstance) {
-          // derived node: only text / visible / assetId can be overridden
+          // derived node: only text / visible / assetId / fontSize can be overridden
           const inst = locate(page, fromInstance)?.node
           const masterChild = (l.node.meta as { instanceOf?: string }).instanceOf
           if (inst && inst.type === 'instance' && masterChild) {
             const ov: InstanceOverride = { ...(inst.overrides[masterChild] ?? {}) }
-            const p = props as { text?: string; visible?: boolean; assetId?: string }
+            const p = props as { text?: string; visible?: boolean; assetId?: string; fontSize?: number }
+            if (p.fontSize !== undefined) ov.fontSize = p.fontSize
             if (p.text !== undefined) ov.text = p.text
             if (p.visible !== undefined) ov.visible = p.visible
             if (p.assetId !== undefined) ov.assetId = p.assetId

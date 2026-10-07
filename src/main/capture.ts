@@ -45,6 +45,10 @@ export interface CaptureRecipe {
   assetRoots?: string[]
   settleMs?: number
   exclude?: string[]
+  /** shared widgets → components: groups whose id/name match `match` become instances of `name` */
+  components?: { name: string; match: string; code?: string }[]
+  /** detect repeated groups as components (default true) */
+  autoComponents?: boolean
   /** true: open a fresh window even if one with the same URL is still alive from the previous capture */
   fresh?: boolean
   screens: CaptureScreen[]
@@ -67,6 +71,8 @@ export interface CaptureOutput {
     screens: { id: string; name?: string; width: number; height: number; kind?: string; screenshot: string; snapshotFrom?: string; code?: string; elements: OutElement[] }[]
     flows?: unknown[]
     start?: string
+    components?: CaptureRecipe['components']
+    autoComponents?: boolean
   }
   report: { id: string; engine: string; elements: number; sources: number; snapshots: number; warnings: string[] }[]
   /** webfonts copied into <root>/uiforge/fonts (file name = family, as the app's project fonts expect) */
@@ -356,7 +362,7 @@ export async function captureGame(recipe: CaptureRecipe, onProgress?: (msg: stri
     if (ev.level === 'error' && consoleErrors.length < 5) consoleErrors.push(ev.message.slice(0, 200))
   })
   const faces: WebFont[] = []
-  const out: CaptureOutput = { fonts: { written: [], unchanged: [], warnings: [] }, design: { schema: 'uiforge-game-design', version: 1, game: { name: recipe.name, root: toPosix(root), engine: recipe.engine, devUrl: recipe.url }, screens: [], flows: recipe.flows, start: recipe.start }, report: [] }
+  const out: CaptureOutput = { fonts: { written: [], unchanged: [], warnings: [] }, design: { schema: 'uiforge-game-design', version: 1, game: { name: recipe.name, root: toPosix(root), engine: recipe.engine, devUrl: recipe.url }, screens: [], flows: recipe.flows, start: recipe.start, components: recipe.components, autoComponents: recipe.autoComponents }, report: [] }
   try {
     let loaded = !!reuse
     for (const screen of recipe.screens) {

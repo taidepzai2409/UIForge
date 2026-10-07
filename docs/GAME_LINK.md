@@ -41,6 +41,9 @@ Việc cần làm:
     // game DOM: root = selector của màn; clip "elements" = frame ôm vừa popup
     { "id": "victory", "kind": "popup", "engine": "dom", "root": "#victory", "clip": "elements", "enter": "show('victory', true)" }
   ],
+  "components": [
+    { "name": "btn_primary", "match": "btn_(play|retry|claim)$", "code": "src/game/ui.ts button()" }
+  ],
   "flows": [
     { "from": "lobby/btn_play", "to": "board" },
     { "from": "board/btn_pause", "to": "pause", "action": "overlay" },
@@ -86,6 +89,28 @@ Tự dựng JSON `uiforge-game-design` (UI vẽ hết trên canvas bằng code, 
 `type`: image · nineslice (`insets` theo px ảnh nguồn) · text · rect (`fill`, `cornerRadius`, `shape: "ellipse"`) · group. `asset` = file art tương đối so với `root` (`crop` nếu chỉ dùng một vùng của atlas/sprite sheet); không có file thì `snapshot: true`. `code` = chỗ trong source đặt element này — agent áp thay đổi sẽ sửa đúng chỗ đó.
 
 Push lại bao nhiêu lần cũng được: element artist chưa đụng thì đi theo game; element đã chỉnh trong app thì giữ nguyên bản chỉnh (vẫn nằm trong danh sách chờ sync).
+
+## Component — widget dùng chung của game
+
+**Mindset**: thứ gì trong game được dựng bằng *cùng một đoạn code* (hàm `button()`, prefab, class `ShopItem`, CSS `.btn-primary`…) thì trong app là **một component**: một master + nhiều instance. Artist sửa master (dời chữ, thay art, đổi cỡ) là mọi chỗ đổi theo, và `CHANGES.md` chỉ ghi **một** mục cho component kèm chỗ code dựng nó → agent sửa đúng một chỗ trong code. Thứ chỉ xuất hiện một lần, hoặc giống nhau nhưng code dựng riêng từng chỗ, thì không phải component.
+
+**Trong app**: master nằm trong frame **Components** (cạnh các màn, page Game UI). Instance ở các màn có:
+- override riêng: chữ, cỡ chữ, ẩn/hiện, ảnh (chuột phải phần trong instance → Thay ảnh…);
+- kích thước riêng: thu/phóng đều thì cả component co giãn; đổi tỉ lệ thì từng phần bám anchor như RectTransform (nền phủ kín → giãn, chữ căn giữa → giãn ngang, còn lại bám cạnh gần nhất).
+Thay file art của master (tab Game) = mọi instance đổi theo.
+
+**Component đến từ đâu** (theo thứ tự ưu tiên):
+1. Game khai báo: recipe `components: [{ "name": "btn_primary", "match": "btn_(play|shop|claim)$", "code": "src/ui/widgets.ts button()" }]` — `match` là regex theo id/tên **group** (Phaser Container, element DOM có con). `push_game_design`: đặt `"component": "<name>"` trên element.
+2. Đã là component ở lần push trước → giữ nguyên (kể cả khi `only` chỉ capture vài màn).
+3. Tự phát hiện (`autoComponents`, mặc định bật): group lặp lại ≥ 2 lần với cùng cấu trúc + cùng art, chỉ khác chữ / kích thước tổng / phần ẩn. Tên lấy từ phần chung của tên element. Tắt bằng `autoComponents: false` nếu game không có widget dùng chung thật.
+
+**Agent của game nên làm khi capture**:
+- Đọc code tìm các widget factory (hàm tạo nút, panel, item danh sách, popup khung, thanh HUD…) → khai báo mỗi cái một rule trong `components` với `code` trỏ đúng hàm/file. Tên component = tên widget trong code.
+- Đặt tên ổn định cho object widget trong code game (Phaser `setName`, DOM `id`/`data-ui`) để `match` bắt được và id không đổi giữa các lần capture.
+- Sau capture xem `pushed.componentsFound` (tên, số chỗ dùng, nguồn `rule`/`auto`): component tự phát hiện sai (hai thứ khác nhau bị gộp, hoặc một widget bị tách vì khác art như huy hiệu hạng 1/2/3) → sửa bằng rule rõ ràng.
+- Game mới: dựng UI bằng widget factory dùng chung ngay từ đầu (một hàm cho mỗi loại nút/panel/item, nhận text/icon làm tham số) — đó chính là component, và là thứ UIForge chỉnh được tập trung.
+
+**Khi áp dụng thay đổi** (`CHANGES.md` mục "Component dùng chung"): toạ độ tính từ góc trên-trái component; sửa trong widget factory (mục `code`), không sửa từng màn. Mục `› phần` trong một màn là override của riêng instance đó (vd chữ của một nút) → sửa tham số truyền vào widget ở chỗ đó.
 
 ## 2. Thay art trong app
 

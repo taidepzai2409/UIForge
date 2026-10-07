@@ -202,6 +202,8 @@ export function collectAssetIds(nodes: SceneNode[], out = new Set<string>()): Se
 /** Recomputes a group's bounds from its children and shifts children so they stay in place. */
 export function fitGroup(g: ContainerNode): void {
   if ((g.type !== 'group' && g.type !== 'instance') || g.children.length === 0) return
+  // a resized instance keeps its own box (its parts are laid out inside it by their anchors)
+  if (g.type === 'instance' && g.size) return
   let x0 = Infinity,
     y0 = Infinity,
     x1 = -Infinity,

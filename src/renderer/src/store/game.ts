@@ -5,11 +5,12 @@ import { createDocument } from '@/model/create'
 import { safeFileName } from '@/model/naming'
 import { fitViewToRect } from '@/canvas/viewMath'
 import { renderFramePng } from '@/canvas/render'
-import { GAME_DIR, buildChangesMarkdown, currentLayout, diffGame, gameFrames, gameIdOf, gameSources, mergeGameDesign, rebaselineGame, replaceGameSource, revertGameSource, setNodeArt, type GameChanges, type GameDesign, type GameElement, type MergeReport } from '@/model/game'
+import { GAME_DIR, priorComponents, buildChangesMarkdown, currentLayout, diffGame, gameFrames, gameIdOf, gameSources, mergeGameDesign, rebaselineGame, replaceGameSource, revertGameSource, setNodeArt, type GameChanges, type GameDesign, type GameElement, type MergeReport } from '@/model/game'
 import { useEditor } from './editor'
 import { clearAssetCache, getAssetBytes, pngFromCanvas, putAssetBytes, setAssetProjectDir, sha256Hex } from './assets'
 import { openProject, saveProject } from './project'
 import { loadProjectFonts } from './fonts'
+import { COMPONENTS_SCREEN, prepareComponents, type PreparedComponent } from '@/model/gameComponents'
 
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp']
 
@@ -104,6 +105,8 @@ export async function ensureGameProject(root: string, name: string): Promise<str
 export interface PushResult extends MergeReport {
   projectDir: string
   pending: number
+  /** components made from the game's shared widgets (declared or detected) */
+  componentsFound: PreparedComponent[]
 }
 
 interface AssetCache {
@@ -128,6 +131,9 @@ export async function pushGameDesign(design: GameDesign): Promise<PushResult> {
   const dir = await ensureGameProject(root, design.game.name)
   // capture may just have written webfonts into <dir>/fonts
   await loadProjectFonts(dir)
+  // shared widgets → component masters (pseudo-screen __components) + instances; earlier pushes' choices stay
+  const prepared = prepareComponents(design, priorComponents(useEditor.getState().doc))
+  design = prepared.design
   lap('project')
   const abs = (p: string): string => (isAbsolute(p) ? p : `${root}/${p}`)
   const warnings: string[] = []
@@ -170,6 +176,8 @@ export async function pushGameDesign(design: GameDesign): Promise<PushResult> {
   }
 
   for (const screen of design.screens) {
+    // master copies take their art from the occurrence they were copied from (loaded with its screen)
+    if (screen.id === COMPONENTS_SCREEN) continue
     status(`Nạp màn ${screen.name ?? screen.id}…`)
     let shot: { bytes: Uint8Array; scale: number; width: number; height: number } | null = null
     if (screen.screenshot) {
@@ -224,8 +232,9 @@ export async function pushGameDesign(design: GameDesign): Promise<PushResult> {
   let report: MergeReport = { screens: [], flows: 0, warnings: [] }
   const hadSync = !!useEditor.getState().doc.game?.syncedAt
   useEditor.getState().update((d) => {
-    report = mergeGameDesign(d, design, { element: (sid, el) => elementAsset.get(`${sid}\n${el.id}`), screenshot: (sid) => shotAsset.get(sid) })
+    report = mergeGameDesign(d, design, { element: (sid, el) => (el.origin ? elementAsset.get(`${el.origin.screenId}\n${el.origin.elementId}`) : elementAsset.get(`${sid}\n${el.id}`)), screenshot: (sid) => shotAsset.get(sid) })
     const link = d.game!
+    if (Object.keys(prepared.signatures).length) link.componentSignatures = { ...(link.componentSignatures ?? {}), ...prepared.signatures }
     for (const [file, a] of sourceAsset) link.assets[file] = { assetId: a.id, width: a.width, height: a.height }
     // a push after a sync means the game picked the changes up: start the next revision
     if (hadSync) {
@@ -251,7 +260,7 @@ export async function pushGameDesign(design: GameDesign): Promise<PushResult> {
   lap('save')
   const pending = diffGame(useEditor.getState().doc).total
   status(`Đã nhận ${report.screens.length} màn từ ${design.game.name}${pending ? ` · ${pending} thay đổi chờ sync` : ''}`)
-  return { ...report, warnings: [...warnings, ...report.warnings], projectDir: dir, pending }
+  return { ...report, warnings: [...warnings, ...prepared.notes, ...report.warnings], projectDir: dir, pending, componentsFound: prepared.components }
 }
 
 // ----------------------------------------------------------------- replacing art
@@ -540,6 +549,7 @@ export const AGENT_PROMPT = `Thiết kế UI của game này vừa được ch�
 Đọc ${GAME_DIR}/CHANGES.md (chi tiết máy đọc: ${GAME_DIR}/changes.json; trạng thái đích: ${GAME_DIR}/layout/<screen>.json; ảnh đích: ${GAME_DIR}/preview/<screen>.png) rồi sửa code/CSS của game cho UI khớp với thiết kế:
 - Art "ĐÃ GHI ĐÈ": file đã nằm đúng chỗ; chỉ sửa code nếu kích thước ảnh đổi làm lệch layout.
 - Art "ẢNH MỚI" trong ${GAME_DIR}/incoming/: chép vào thư mục asset của game, nạp và dùng cho đúng element.
+- Mục "Component dùng chung": sửa trong widget factory ghi ở "code" (toạ độ tính từ góc trên-trái component) — một chỗ, mọi nơi dùng đổi theo; không sửa từng màn. Mục "<element> › <phần>" là override của riêng một instance: sửa tham số truyền vào widget ở chỗ đó.
 - Thay đổi vị trí/kích thước/chữ/ẩn-hiện/thêm/xoá: sửa đúng chỗ ghi ở "code" (nếu có), giữ nguyên cơ chế responsive sẵn có của game.
 - Không đổi gameplay, không đụng thứ không có trong danh sách.
 Xong thì chạy build/test sẵn có của game nếu có. Cuối cùng: nếu có MCP uiforge, gọi capture_game {root} để đẩy lại UI mới (hoặc ack_game_changes nếu không capture được); nếu không có MCP, ghi ${GAME_DIR}/applied.json dạng {"revision": <revision trong changes.json>, "applied": [...], "skipped": [{"element": "...", "reason": "..."}]}.

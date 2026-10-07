@@ -100,6 +100,7 @@ export interface InstanceOverride {
   text?: string
   visible?: boolean
   assetId?: string
+  fontSize?: number
 }
 
 export interface FrameNode extends BaseNode {
@@ -128,6 +129,9 @@ export interface InstanceNode extends BaseNode {
   componentId: NodeId
   /** keyed by the master child's id */
   overrides: Record<NodeId, InstanceOverride>
+  /** set when the instance is resized: its own box (children follow their anchors, like a RectTransform);
+   *  without it the instance takes the master's size */
+  size?: { width: number; height: number }
   children: SceneNode[]
 }
 
