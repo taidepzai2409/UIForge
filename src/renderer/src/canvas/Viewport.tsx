@@ -26,6 +26,7 @@ import {
   scaleChildren,
   snapMove,
   unlockedChain,
+  deepestAt,
   type HandleId
 } from './interaction'
 
@@ -518,7 +519,13 @@ class ViewportController {
       scopeId = null
       s.setScope(null)
     }
-    const cand = pickCandidate(chain, scopeId)
+    // Ctrl / ⌘ + click goes straight to the deepest layer and enters its parent (siblings are one click away)
+    const deep = e.ctrlKey || e.metaKey ? deepestAt(chain) : null
+    if (deep) {
+      const parent = getEntry(page, deep.id)?.parent
+      if (parent && parent.type !== 'instance') s.setScope(parent.id)
+    }
+    const cand = deep ?? pickCandidate(chain, deep ? null : scopeId)
     if (!cand) {
       if (!e.shiftKey) s.select([])
       this.drag = { kind: 'marquee', wx, wy, cx: wx, cy: wy, additive: e.shiftKey, base: e.shiftKey ? sel : [] }
@@ -902,8 +909,8 @@ class ViewportController {
     const cand = pickCandidate(chain, s.scopeId)
     if (!cand) return
     if (isContainer(cand)) {
-      const idx = chain.indexOf(cand)
-      const deeper = chain[idx + 1]
+      // one double-click enters the group and goes through its wrappers (single child / screen-sized)
+      const deeper = chain[chain.indexOf(cand) + 1] ? pickCandidate(chain, cand.id) : null
       if (deeper) {
         s.setScope(cand.id)
         s.select([deeper.id])

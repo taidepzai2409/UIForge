@@ -2,10 +2,30 @@ import type { NodeId, Page, SceneNode } from '@/model/types'
 import { isContainer } from '@/model/types'
 import { absRect, getEntry, hitChain, type Rect } from '@/model/nodes'
 
-/** Cuts the chain at the first locked node (a locked ancestor locks its subtree). */
+/**
+ * Cuts the chain at the first locked node (a locked ancestor locks its subtree). Parts of a component
+ * instance are locked only against moving: they stay selectable (to override a text or an image).
+ */
 export function unlockedChain(chain: SceneNode[]): SceneNode[] {
-  const i = chain.findIndex((n) => n.locked)
+  const i = chain.findIndex((n) => n.locked && !n.meta?.fromInstance)
   return i < 0 ? chain : chain.slice(0, i)
+}
+
+/**
+ * Wrapper groups a click goes through, like the top-level frame: a group with a single child, or one that
+ * covers most of the screen (≥ 75 %) — UI captured from a game nests buttons under many of those
+ * (stage / ui / canvasRoot / panel / Root…), and one click per level made inner layers unreachable.
+ */
+function passThrough(n: SceneNode, screen: SceneNode | undefined): boolean {
+  if (n.type !== 'group' || n.component) return false
+  if (n.children.length === 1) return true
+  return !!screen && screen.type === 'frame' && n.width * n.height >= 0.75 * screen.width * screen.height
+}
+
+function skipWrappers(chain: SceneNode[], i: number): SceneNode {
+  const screen = chain[0]?.type === 'frame' ? chain[0] : undefined
+  while (i < chain.length - 1 && passThrough(chain[i], screen)) i++
+  return chain[i]
 }
 
 /**
@@ -18,13 +38,18 @@ export function pickCandidate(chain: SceneNode[], scopeId: NodeId | null): Scene
     const si = chain.findIndex((n) => n.id === scopeId)
     if (si >= 0) {
       const next = chain[si + 1]
-      if (next) return next
+      if (next) return skipWrappers(chain, si + 1)
       return chain[si].type === 'frame' ? chain[si] : null
     }
   }
   const first = chain[0]
-  if (first.type === 'frame' && chain.length > 1) return chain[1]
+  if (first.type === 'frame' && chain.length > 1) return skipWrappers(chain, 1)
   return first
+}
+
+/** Ctrl / ⌘ + click: the deepest layer under the cursor, whatever groups it is in (Figma's deep select). */
+export function deepestAt(chain: SceneNode[]): SceneNode | null {
+  return chain.length ? chain[chain.length - 1] : null
 }
 
 export function pickAt(page: Page, wx: number, wy: number, scopeId: NodeId | null): SceneNode | null {
