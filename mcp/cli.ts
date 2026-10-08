@@ -6,6 +6,9 @@
 //   stage-art --root <game> --folder <dir>         new art into the UIForge project (not the game) for review;
 //                                                  several versions of one asset (x_v1, x_v2…) become options
 //   variants --root <game>                         options waiting for the board + what it chose / dropped
+//   capture --root <game> [--only a,b]             re-capture the game's UI with its saved recipe (dev server must run)
+//   changes --root <game>                          what the design changed that the game does not have yet
+//   ack --root <game>                              the game now matches the design (when capture is impossible)
 //
 // Output: ONE JSON line on stdout. Exit 0 = ok, 1 = error, 3 = a human must look (needs_review / app closed).
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
@@ -315,6 +318,47 @@ function variants(opt: Record<string, string | true>): never {
   done({ ok: true, pending, decisions })
 }
 
+// ---------------------------------------------------------------- capture / changes / ack (dev side)
+async function capture(opt: Record<string, string | true>): Promise<never> {
+  if (typeof opt.root !== 'string') fail('bad_args', 'cần --root <thư mục game>')
+  const root = resolve(opt.root)
+  const recipeFile = join(root, GAME_DIR, 'capture.json')
+  if (!existsSync(recipeFile)) fail('no_recipe', `Chưa có recipe ${posix(recipeFile)}: lần capture đầu cần dựng recipe (MCP capture_game, xem game_guide) — cần người`, 3)
+  const recipe = JSON.parse(readFileSync(recipeFile, 'utf8')) as { url?: string; screens?: { id: string }[] }
+  if (recipe.url) {
+    try {
+      await fetch(recipe.url, { signal: AbortSignal.timeout(3000) })
+    } catch {
+      fail('dev_server_down', `Dev server của game không chạy (${recipe.url}) — chạy dev server rồi thử lại`)
+    }
+  }
+  const only = typeof opt.only === 'string' ? opt.only.split(',').map((s) => s.trim()).filter(Boolean) : null
+  const run = { ...recipe, root: posix(root), ...(only ? { screens: (recipe.screens ?? []).filter((s) => only.includes(s.id)) } : {}) }
+  if (!(await ensureApp())) fail('app_not_running', 'Không mở được app UIForge — mở app rồi chạy lại', 3)
+  const cap = await bridge<{ design: unknown; report: { id: string; elements: number; warnings: string[] }[]; fonts?: unknown }>('captureGame', run)
+  writeFileSync(join(root, GAME_DIR, 'design.json'), JSON.stringify(cap.design, null, 2))
+  const pushed = await bridge<{ pending?: number; warnings?: string[]; componentsFound?: { name: string }[] }>('pushGameDesign', { design: cap.design })
+  const warnings = [...cap.report.flatMap((r) => r.warnings.map((w) => `${r.id}: ${w}`)), ...(pushed.warnings ?? [])]
+  done({ ok: true, screens: cap.report.map((r) => ({ id: r.id, elements: r.elements })), components: (pushed.componentsFound ?? []).length, pending: pushed.pending ?? 0, warnings: warnings.slice(0, 20) })
+}
+
+async function changes(opt: Record<string, string | true>): Promise<never> {
+  if (typeof opt.root !== 'string') fail('bad_args', 'cần --root <thư mục game>')
+  const root = resolve(opt.root)
+  const doc = loadProject(root)
+  const { diffGame, buildChangesMarkdown } = await import('@/model/game')
+  const c = diffGame(doc)
+  done({ ok: true, total: c.total, assets: c.assets.length, screens: c.screens.map((s) => ({ id: s.id, changes: s.changes.length })), markdown: buildChangesMarkdown(c), changesFile: existsSync(join(root, GAME_DIR, 'CHANGES.md')) ? posix(join(root, GAME_DIR, 'CHANGES.md')) : undefined })
+}
+
+async function ack(opt: Record<string, string | true>): Promise<never> {
+  if (typeof opt.root !== 'string') fail('bad_args', 'cần --root <thư mục game>')
+  const root = resolve(opt.root)
+  if (!(await ensureApp())) fail('app_not_running', 'Không mở được app UIForge — mở app rồi chạy lại', 3)
+  await bridge('openGame', { root: posix(root), name: basename(root) })
+  done({ ok: true, ...(await bridge<Record<string, unknown>>('ackGame', {})) })
+}
+
 // ---------------------------------------------------------------- main
 const HELP = `uiforge <lệnh> [tuỳ chọn]   (1 dòng JSON ra stdout; exit 0 ok · 1 lỗi · 3 cần người xem)
   list-assets --root <game> [--out-dir <dir>] [--no-sheet]
@@ -322,7 +366,10 @@ const HELP = `uiforge <lệnh> [tuỳ chọn]   (1 dòng JSON ra stdout; exit 0 
           [--out <png>] [--mode contain|cover|stretch] [--pad <px>] [--keep-bg] [--keep-specks] [--force]
   stage-art --root <game> (--folder <dir> | --file <ảnh> [--target …]) [--dry-run]
             (nhiều bản một asset: <stageName>_v1.png, _v2… → phương án để board chọn trong app)
-  variants --root <game> [--since <ISO date>]   phương án đang chờ + board đã chọn / loại gì`
+  variants --root <game> [--since <ISO date>]   phương án đang chờ + board đã chọn / loại gì
+  capture --root <game> [--only <màn,màn>]      capture lại UI game bằng recipe đã lưu (dev server phải chạy)
+  changes --root <game>                         thay đổi UI thiết kế có mà game chưa có (như CHANGES.md)
+  ack --root <game>                             báo game đã khớp thiết kế (khi không capture được)`
 
 const { cmd, opt } = args(process.argv.slice(2))
 try {
@@ -330,6 +377,9 @@ try {
   else if (cmd === 'fit-art') fitArt(opt)
   else if (cmd === 'stage-art') await stageArt(opt)
   else if (cmd === 'variants') variants(opt)
+  else if (cmd === 'capture') await capture(opt)
+  else if (cmd === 'changes') await changes(opt)
+  else if (cmd === 'ack') await ack(opt)
   else done({ ok: false, error: 'bad_args', message: HELP }, cmd === 'help' || cmd === '--help' || !cmd ? 0 : 1)
 } catch (e) {
   fail('error', String((e as Error)?.stack ?? e))
