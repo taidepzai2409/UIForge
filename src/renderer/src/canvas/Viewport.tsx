@@ -40,6 +40,7 @@ type SliceEdge = 'left' | 'top' | 'right' | 'bottom'
 
 type Drag =
   | { kind: 'pan'; sx: number; sy: number; vx: number; vy: number }
+  /** orig: ABSOLUTE page positions at drag start (a parent group re-fits while its child moves) */
   | { kind: 'move'; sx: number; sy: number; ids: NodeId[]; orig: Map<NodeId, { x: number; y: number }>; started: boolean; bboxOrig: Rect; clickedId: NodeId; shift: boolean }
   | { kind: 'marquee'; wx: number; wy: number; cx: number; cy: number; additive: boolean; base: NodeId[] }
   | { kind: 'resize'; sx: number; sy: number; id: NodeId; orig: Rect; handle: HandleId; origChildren: SceneNode[] | null; started: boolean; parentAbs: { x: number; y: number } }
@@ -544,11 +545,10 @@ class ViewportController {
     const orig = new Map<NodeId, { x: number; y: number }>()
     const rects: Rect[] = []
     for (const id of ids) {
-      const n = getEntry(page, id)?.node
-      if (!n) continue
-      orig.set(id, { x: n.x, y: n.y })
       const r = absRect(page, id)
-      if (r) rects.push(r)
+      if (!r) continue
+      orig.set(id, { x: r.x, y: r.y })
+      rects.push(r)
     }
     const bboxOrig = unionRects(rects) ?? { x: 0, y: 0, width: 0, height: 0 }
     this.drag = { kind: 'move', sx, sy, ids, orig, started: false, bboxOrig, clickedId, shift }
@@ -595,14 +595,23 @@ class ViewportController {
             dy = Math.round(d.bboxOrig.y + dy) - d.bboxOrig.y
           }
         }
+        // target = start position + mouse delta, in page coordinates; converted to each node's parent as the
+        // parent is NOW (a group re-fits to its children after every step, which moves its origin)
+        const live = getCurrentPage()
+        const parentAbs = new Map<NodeId, { x: number; y: number }>()
+        for (const id of d.ids) {
+          const en = getEntry(live, id)
+          if (en) parentAbs.set(id, { x: en.absX - en.node.x, y: en.absY - en.node.y })
+        }
         s.updatePage(
           (pg) => {
             for (const id of d.ids) {
               const l = locate(pg, id)
               const o = d.orig.get(id)
-              if (l && o && !l.node.locked) {
-                l.node.x = Math.round((o.x + dx) * 100) / 100
-                l.node.y = Math.round((o.y + dy) * 100) / 100
+              const pa = parentAbs.get(id)
+              if (l && o && pa && !l.node.locked) {
+                l.node.x = Math.round((o.x + dx - pa.x) * 100) / 100
+                l.node.y = Math.round((o.y + dy - pa.y) * 100) / 100
               }
             }
           },
@@ -630,19 +639,23 @@ class ViewportController {
         const dx = (sx - d.sx) / v.zoom
         const dy = (sy - d.sy) / v.zoom
         const nr = resizeRect(d.orig, d.handle, dx, dy, e.shiftKey, e.altKey)
+        // the rect in page coordinates (from the parent as it was at drag start) …
+        let ax = d.parentAbs.x + nr.x
+        let ay = d.parentAbs.y + nr.y
         if (pixelSnapOn()) {
-          // edges on whole page pixels (absolute), like Photoshop's snap to pixel
-          const px = d.parentAbs.x
-          const py = d.parentAbs.y
-          const x0 = Math.round(px + nr.x)
-          const y0 = Math.round(py + nr.y)
-          const x1 = Math.round(px + nr.x + nr.width)
-          const y1 = Math.round(py + nr.y + nr.height)
-          nr.x = x0 - px
-          nr.y = y0 - py
-          nr.width = Math.max(1, x1 - x0)
-          nr.height = Math.max(1, y1 - y0)
+          // edges on whole page pixels, like Photoshop's snap to pixel
+          const x1 = Math.round(ax + nr.width)
+          const y1 = Math.round(ay + nr.height)
+          ax = Math.round(ax)
+          ay = Math.round(ay)
+          nr.width = Math.max(1, x1 - ax)
+          nr.height = Math.max(1, y1 - ay)
         }
+        // … back into the parent as it is now (a group parent re-fits while its child resizes)
+        const en = getEntry(getCurrentPage(), d.id)
+        const nowParent = en ? { x: en.absX - en.node.x, y: en.absY - en.node.y } : d.parentAbs
+        nr.x = ax - nowParent.x
+        nr.y = ay - nowParent.y
         s.updatePage(
           (pg) => {
             const l = locate(pg, d.id)
