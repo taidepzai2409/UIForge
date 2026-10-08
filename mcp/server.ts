@@ -23,6 +23,7 @@ import { DEFAULT_OVERLAY, defaultsForAction, normalizeConnection } from '@/model
 import specMarkdown from '../docs/LAYOUT_SPEC.md'
 import gameGuide from '../docs/GAME_LINK.md'
 import { GAME_DIR, buildChangesMarkdown, diffGame, type GameDesign, type GameElement } from '@/model/game'
+import { assetsMarkdown, listGameAssets } from '@/model/gameAssets'
 
 // ----------------------------------------------------------------- args / state
 const args = process.argv.slice(2)
@@ -1007,6 +1008,22 @@ server.registerTool(
     if (!(await appAvailable())) throw new Error('App UIForge chưa chạy.')
     await openGame(root)
     return text(await bridge('ackGame'))
+  }
+)
+
+server.registerTool(
+  'list_game_assets',
+  {
+    description:
+      'Danh sách art UI của game (từ project UIForge): mỗi file art đang hiện trên các màn (đường dẫn, kích thước px, 9-slice insets, dùng ở màn/component nào, hiện bao nhiêu chỗ, vai trò đoán: button/panel/icon/…, ảnh hiện tại) + các phần game vẽ bằng code / cắt từ atlas (cần art mới, có stageName để trả về). Dùng để lên danh sách gen lại art UI. Ảnh tổng hợp có đánh số + file ASSETS.json/md/csv: chạy CLI `node <UIForge>/out/cli/uiforge.mjs list-assets --root <game>`.',
+    inputSchema: { root: z.string().describe('thư mục game'), json: z.boolean().optional().describe('true: trả JSON đầy đủ thay vì bảng markdown') }
+  },
+  async ({ root, json }) => {
+    const file = join(gameDir(root), 'project.json')
+    if (!existsSync(file)) throw new Error(`Chưa có project UIForge: ${file} (capture_game trước)`)
+    const doc = JSON.parse(await readFile(file, 'utf8')) as DesignDocument
+    const list = listGameAssets(doc)
+    return text(json ? list : assetsMarkdown(doc.game!.name, list))
   }
 )
 

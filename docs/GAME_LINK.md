@@ -112,6 +112,17 @@ Thay file art của master (tab Game) = mọi instance đổi theo.
 
 **Khi áp dụng thay đổi** (`CHANGES.md` mục "Component dùng chung"): toạ độ tính từ góc trên-trái component; sửa trong widget factory (mục `code`), không sửa từng màn. Mục `› phần` trong một màn là override của riêng instance đó (vd chữ của một nút) → sửa tham số truyền vào widget ở chỗ đó.
 
+## Art agent — gen lại art UI (CLI)
+
+Cho agent chạy tool bằng terminal (Agent Studio / Art Lead): `node F:/Figma_clone/Figma_clone/out/cli/uiforge.mjs <lệnh>`. Mỗi lệnh in **một dòng JSON**; exit `0` ok · `1` lỗi · `3` cần người xem. Không cần MCP.
+
+1. **`list-assets --root <game>`** → `uiforge/ASSETS.json` + `ASSETS.md` + `assets.csv` (cùng cột với asset-inventory của studio, `nine_slice_LBRT` = trái,dưới,phải,trên) + `ASSETS.png` (ảnh tổng hợp đánh số). Mỗi asset: `stageName` (tên lưu art mới), kích thước px, 9-slice insets, vai trò (button/panel/icon/bar/badge/…), số chỗ hiện, component, màn dùng, ảnh hiện tại. `kind: "drawn"` = game vẽ bằng code/cắt atlas → không có file, art mới vào `uiforge/incoming/`. Sắp theo mức hiển thị: làm từ đầu danh sách.
+2. Gen art theo brief (style chung + ảnh tham chiếu từ `ASSETS.png` / preview). Nền trắng phẳng là được.
+3. **`fit-art --in <ảnh gen> --root <game> --target <stageName|file game|#số> [--out <png>]`** → PNG trong suốt **đúng px** của asset: cắt nền trắng/vignette nối với mép ảnh, bỏ đốm nhỏ (watermark ✦), trim, căn giữa (`--mode contain` mặc định; `cover`; `stretch`). Khung 9-slice mặc định lấp đầy khung và được kiểm: phần giữa theo chiều giãn phải phẳng → không đạt thì `needs_review` + exit 3. Không ghi đè (`--force`). Mặc định ra `<thư mục ảnh>/fit/<stageName>.png`.
+4. **`stage-art --root <game> --folder <thư mục fit/> [--dry-run]`** → art vào **project UIForge** (khớp theo `stageName`), **không ghi vào game**. Mở app nếu chưa chạy (không mở được → exit 3). Loi xem trong app (tab Game / các màn) → **Sync → Game** mới ghi vào game; đó là bước duyệt.
+
+MCP có `list_game_assets {root}` (bảng / JSON) cho session Claude Code thường.
+
 ## 2. Thay art trong app
 
 - Tab **Game** (panel trái): danh sách file art của game đang dùng trong UI. Kéo-thả ảnh vào một dòng, hoặc bấm **Thay…**; một file thay = mọi chỗ dùng file đó đổi theo.
