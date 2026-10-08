@@ -23,9 +23,16 @@ import { alphaBox, blank, blit, checkNineSlice, contactSheet, crop, cutWhiteBack
 
 // ---------------------------------------------------------------- output
 function done(result: Record<string, unknown>, code = 0): never {
+  // Node 24 on Windows can abort in libuv (async.c:76) when process.exit() runs while fetch sockets are
+  // still closing, so the normal path never calls it: set exitCode, unwind to the top level and let the
+  // loop drain (requests use `connection: close`). The unref'd timer only fires if something keeps it alive.
+  process.exitCode = code
   process.stdout.write(JSON.stringify(result) + '\n')
-  process.exit(code)
+  setTimeout(() => process.exit(code), 3000).unref()
+  throw EXIT
 }
+
+const EXIT = Symbol('exit')
 
 function fail(error: string, message: string, code = 1): never {
   done({ ok: false, error, message }, code)
@@ -209,7 +216,7 @@ const port = Number(process.env.DM_BRIDGE_PORT ?? 47821)
 
 async function health(): Promise<boolean> {
   try {
-    const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(800) })
+    const r = await fetch(`http://127.0.0.1:${port}/health`, { headers: { connection: 'close' }, signal: AbortSignal.timeout(800) })
     return r.ok
   } catch {
     return false
@@ -217,7 +224,7 @@ async function health(): Promise<boolean> {
 }
 
 async function bridge<T>(method: string, params: Record<string, unknown>): Promise<T> {
-  const r = await fetch(`http://127.0.0.1:${port}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ method, params }) })
+  const r = await fetch(`http://127.0.0.1:${port}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json', connection: 'close' }, body: JSON.stringify({ method, params }) })
   const j = (await r.json()) as { result?: T; error?: string }
   if (j.error) throw new Error(j.error)
   return j.result as T
@@ -327,7 +334,7 @@ async function capture(opt: Record<string, string | true>): Promise<never> {
   const recipe = JSON.parse(readFileSync(recipeFile, 'utf8')) as { url?: string; screens?: { id: string }[] }
   if (recipe.url) {
     try {
-      await fetch(recipe.url, { signal: AbortSignal.timeout(3000) })
+      await (await fetch(recipe.url, { headers: { connection: 'close' }, signal: AbortSignal.timeout(3000) })).arrayBuffer()
     } catch {
       fail('dev_server_down', `Dev server của game không chạy (${recipe.url}) — chạy dev server rồi thử lại`)
     }
@@ -382,5 +389,11 @@ try {
   else if (cmd === 'ack') await ack(opt)
   else done({ ok: false, error: 'bad_args', message: HELP }, cmd === 'help' || cmd === '--help' || !cmd ? 0 : 1)
 } catch (e) {
-  fail('error', String((e as Error)?.stack ?? e))
+  if (e !== EXIT) {
+    try {
+      fail('error', String((e as Error)?.stack ?? e))
+    } catch {
+      // EXIT
+    }
+  }
 }
