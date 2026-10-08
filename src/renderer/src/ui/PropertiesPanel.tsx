@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AutoLayout, FrameNode, GroupNode, InstanceNode, NineSliceNode, SceneNode, TextNode } from '@/model/types'
 import { findMaster } from '@/model/instances'
 import { STATE_NAMES, stateChildren, type StateName } from '@/model/states'
@@ -11,6 +11,7 @@ import { hexToRgba } from '@/model/color'
 import { getEntry } from '@/model/nodes'
 import { useCurrentPage, useEditor } from '@/store/editor'
 import { getBlobUrl } from '@/store/assets'
+import { artUsage, pickAndReplaceNode } from '@/store/game'
 import { fontFamilies } from '@/store/fonts'
 import { Check, ColorField, NumField, Section, TextField } from './fields'
 import { alignSelection, type AlignKind } from './actions'
@@ -585,6 +586,12 @@ function ImageProps({ n }: { n: SceneNode & { assetId: string } }): React.JSX.El
     }
   }, [asset])
   const ns = n.type === 'nineslice' ? (n as NineSliceNode) : null
+  // computed from the document (a zustand selector must not return a fresh object each call)
+  const doc = useEditor((s) => s.doc)
+  const usage = useMemo(() => artUsage(doc, n.id), [doc, n.id])
+  const replace = (scope: 'all' | 'one'): void => {
+    void pickAndReplaceNode(n.id, scope).catch((e) => st.setStatus(String((e as Error)?.message ?? e)))
+  }
   const setIns = (patch: Partial<NineSliceNode['insets']>): void => {
     if (!ns) return
     st.setNodeProps(n.id, { insets: { ...ns.insets, ...patch } } as Partial<SceneNode>)
@@ -598,6 +605,20 @@ function ImageProps({ n }: { n: SceneNode & { assetId: string } }): React.JSX.El
           {asset?.source && <div title={asset.source}>{asset.source}</div>}
         </div>
       </div>
+      <button className="accent" onClick={() => replace('all')} title={usage && usage.count > 1 ? `Đổi ảnh ở cả ${usage.count} chỗ đang dùng ảnh này` : 'Chọn file ảnh mới cho layer này'}>
+        Replace this asset…
+      </button>
+      {usage && (usage.count > 1 || usage.instancePart) && (
+        <div className="replace-scope">
+          <span className="hint">
+            {usage.instancePart ? 'Phần của component: đổi ở master → mọi instance' : `Đổi cả ${usage.count} chỗ dùng ảnh này`}
+            {usage.source ? ` · file game ${usage.source.replace(/^.*\//, '')}` : ''}
+          </span>
+          <button className="mini" onClick={() => replace('one')} title={usage.instancePart ? 'Ảnh riêng cho instance này (override)' : 'Chỉ thay layer đang chọn'}>
+            Chỉ chỗ này…
+          </button>
+        </div>
+      )}
       <button onClick={() => window.dispatchEvent(new CustomEvent('dm:image-edit'))} title="Ctrl+Shift+U">
         Chỉnh ảnh: crop · lật · xoay · màu…
       </button>

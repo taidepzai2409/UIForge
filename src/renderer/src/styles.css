@@ -1395,3 +1395,5 @@ button.link {
 .game-error { color: var(--danger); line-height: 17px; }
 .game-opt { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 .game-log { margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); font-family: Consolas, 'SF Mono', monospace; font-size: 11px; line-height: 16px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; flex-shrink: 0; }
+.replace-scope { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.replace-scope .hint { flex: 1; min-width: 0; }

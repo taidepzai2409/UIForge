@@ -1,6 +1,7 @@
 // Game link, renderer side: loads the art a game pushes, replaces art, and writes changes back into the
 // game folder. The rules (merge / diff / baseline) are pure and live in model/game.ts.
-import type { Asset, DesignDocument, NodeId } from '@/model/types'
+import type { Asset, DesignDocument, NodeId, SceneNode } from '@/model/types'
+import { indexPage } from '@/model/nodes'
 import { createDocument } from '@/model/create'
 import { safeFileName } from '@/model/naming'
 import { fitViewToRect } from '@/canvas/viewMath'
@@ -303,10 +304,95 @@ export async function replaceNodeArt(nodeId: NodeId, bytes: Uint8Array, fileName
   return 1
 }
 
-export async function pickAndReplaceNode(nodeId: NodeId): Promise<void> {
-  const files = await window.api.openFiles({ title: 'Chọn ảnh thay thế', filters: [{ name: 'Ảnh', extensions: IMAGE_EXT }] })
+const ART_DIR_KEY = 'uiforge.lastArtDir'
+
+function findNodeAnywhere(doc: DesignDocument, id: NodeId): SceneNode | undefined {
+  for (const p of doc.pages) {
+    const e = indexPage(p).byId.get(id)
+    if (e) return e.node
+  }
+  return undefined
+}
+
+/** Every drawn image (instance parts included) that shows this asset. */
+function countAssetUses(doc: DesignDocument, assetId: string): number {
+  let n = 0
+  for (const p of doc.pages) for (const e of indexPage(p).byId.values()) if ((e.node.type === 'image' || e.node.type === 'nineslice') && e.node.assetId === assetId) n++
+  return n
+}
+
+export interface ArtUsage {
+  /** places that change with "replace everywhere" */
+  count: number
+  /** the game file behind this image, when there is one */
+  source?: string
+  /** a part of a component instance: "everywhere" = the master (every instance) */
+  instancePart: boolean
+}
+
+export function artUsage(doc: DesignDocument, nodeId: NodeId): ArtUsage | null {
+  const n = findNodeAnywhere(doc, nodeId)
+  if (!n || (n.type !== 'image' && n.type !== 'nineslice')) return null
+  const masterId = n.meta?.fromInstance ? (n.meta.instanceOf as NodeId | undefined) : undefined
+  const target = masterId ?? nodeId
+  return { count: countAssetUses(doc, n.assetId), source: doc.game ? sourceOfNode(doc, target) : undefined, instancePart: !!masterId }
+}
+
+/**
+ * New art for an image. scope 'all': everywhere the same art is shown (the game file's users, or every
+ * layer with the same image; a part of an instance changes its master). scope 'one': this layer only (a part
+ * of an instance gets an override).
+ */
+export async function replaceNodeArtScoped(nodeId: NodeId, bytes: Uint8Array, fileName: string, scope: 'all' | 'one'): Promise<number> {
+  const doc = useEditor.getState().doc
+  const n = findNodeAnywhere(doc, nodeId)
+  if (!n) throw new Error('Không thấy layer.')
+  if (scope === 'one') {
+    const asset = await assetFromBytes(bytes, baseName(fileName), `replace:${fileName}`)
+    let ok = false
+    useEditor.getState().update((d) => {
+      ok = setNodeArt(d, nodeId, asset.id)
+    })
+    if (!ok) throw new Error('Layer này không thay ảnh được (chỉ image, 9-slice, rect, text).')
+    status(`Đã thay ảnh riêng cho ${n.name} (${asset.width}×${asset.height})`)
+    return 1
+  }
+  const target = (n.meta?.fromInstance ? (n.meta.instanceOf as NodeId | undefined) : undefined) ?? nodeId
+  const source = doc.game ? sourceOfNode(doc, target) : undefined
+  if (source) return replaceSource(source, bytes, fileName)
+  const old = n.type === 'image' || n.type === 'nineslice' ? n.assetId : undefined
+  const asset = await assetFromBytes(bytes, baseName(fileName), `replace:${fileName}`)
+  let count = 0
+  useEditor.getState().update((d) => {
+    const ids = new Set<NodeId>([target])
+    if (old)
+      for (const p of d.pages)
+        for (const e of indexPage(p).byId.values()) {
+          const x = e.node
+          if ((x.type === 'image' || x.type === 'nineslice') && x.assetId === old && !x.meta?.fromInstance) ids.add(x.id)
+        }
+    for (const id of ids) if (setNodeArt(d, id, asset.id)) count++
+  })
+  if (!count) throw new Error('Layer này không thay ảnh được (chỉ image, 9-slice, rect, text).')
+  status(`Đã thay ảnh ở ${count} layer (${asset.width}×${asset.height})`)
+  return count
+}
+
+export async function pickAndReplaceNode(nodeId: NodeId, scope: 'all' | 'one' = 'all'): Promise<void> {
+  let dir: string | undefined
+  try {
+    dir = localStorage.getItem(ART_DIR_KEY) ?? undefined
+  } catch {
+    /* ignore */
+  }
+  const files = await window.api.openFiles({ title: 'Chọn ảnh thay thế', filters: [{ name: 'Ảnh', extensions: IMAGE_EXT }], defaultPath: dir })
   if (!files.length) return
-  await replaceNodeArt(nodeId, await window.api.readFile(files[0]), files[0])
+  try {
+    localStorage.setItem(ART_DIR_KEY, files[0].replace(/[\\/][^\\/]*$/, ''))
+  } catch {
+    /* ignore */
+  }
+  await replaceNodeArtScoped(nodeId, await window.api.readFile(files[0]), files[0], scope)
 }
 
 export async function pickAndReplaceSource(source: string): Promise<void> {
