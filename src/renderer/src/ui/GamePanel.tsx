@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useEditor } from '@/store/editor'
 import { getBlobUrl } from '@/store/assets'
 import { GAME_DIR, diffGame, gameSources, type GameChanges, type GameSource } from '@/model/game'
-import { ackGame, pickAndReplaceSource, replaceFromFiles, replaceFromFolder, replaceSource, revertSource, runGameAgent, syncGame, type SyncResult } from '@/store/game'
+import { ackGame, chooseVariant, pickAndReplaceSource, previewVariant, previewVariantSet, replaceFromFiles, replaceFromFolder, replaceSource, revertSource, runGameAgent, syncGame, type SyncResult } from '@/store/game'
+import { variantLabels, type VariantSet } from '@/model/gameVariants'
 import { FloatingWindow } from './FloatingWindow'
 
 const OPT_KEY = 'uiforge.gameSync'
@@ -49,6 +50,78 @@ function Thumb({ assetId }: { assetId: string }): React.JSX.Element {
     }
   }, [asset])
   return <div className="game-thumb">{url && <img src={url} alt="" />}</div>
+}
+
+/** Selects every layer showing an asset (to find it on the canvas). */
+function selectUsers(set: VariantSet): void {
+  const st = useEditor.getState()
+  const ids = set.target.kind === 'node' ? [set.target.nodeId] : (gameSources(st.doc).find((s) => s.source === (set.target as { source: string }).source)?.usedBy.map((u) => u.nodeId) ?? [])
+  if (!ids.length) return
+  const page = st.doc.pages.find((p) => JSON.stringify(p.children).includes(`"id":"${ids[0]}"`))
+  if (page && page.id !== st.pageId) st.setPage(page.id)
+  st.select(ids)
+}
+
+function OptionThumb({ assetId, label, active, onClick }: { assetId: string; label: string; active: boolean; onClick: () => void }): React.JSX.Element {
+  return (
+    <button className={`variant-opt ${active ? 'active' : ''}`} onClick={onClick} title={active ? `${label} đang hiện trên các màn` : `Xem ${label} trên các màn`}>
+      <Thumb assetId={assetId} />
+      <span>{label}</span>
+    </button>
+  )
+}
+
+/** Several generated versions per asset: preview each one on the real screens, keep one. */
+function VariantsSection(): React.JSX.Element | null {
+  const variants = useEditor((s) => s.doc.game?.variants)
+  const doc = useEditor((s) => s.doc)
+  const labels = useMemo(() => variantLabels(doc), [doc])
+  const sets = Object.entries(variants ?? {})
+  if (!sets.length) return null
+  const allOn = (label: string | null): boolean => sets.every(([, s]) => (label ? s.options.find((o) => o.label === label)?.id === s.active || !s.options.some((o) => o.label === label) : !s.active))
+  return (
+    <div className="game-variants">
+      <div className="game-section-title">Phương án chờ chọn ({sets.length})</div>
+      {labels.length > 0 && sets.length > 1 && (
+        <div className="variant-setbar">
+          <span className="dim">Xem cả bộ:</span>
+          <button className={`mini ${allOn(null) ? 'on' : ''}`} onClick={() => previewVariantSet(null)}>
+            Gốc
+          </button>
+          {labels.map((l) => (
+            <button key={l} className={`mini ${allOn(l) ? 'on' : ''}`} onClick={() => previewVariantSet(l)}>
+              {l}
+            </button>
+          ))}
+        </div>
+      )}
+      {sets.map(([key, s]) => {
+        const active = s.options.find((o) => o.id === s.active)
+        return (
+          <div key={key} className="variant-row">
+            <div className="variant-name" title="Chọn các layer đang dùng asset này" onClick={() => selectUsers(s)}>
+              {s.name}
+            </div>
+            <div className="variant-opts">
+              <OptionThumb assetId={s.originalAssetId} label="Gốc" active={!s.active} onClick={() => previewVariant(key, null)} />
+              {s.options.map((o) => (
+                <OptionThumb key={o.id} assetId={o.assetId} label={o.label} active={s.active === o.id} onClick={() => previewVariant(key, o.id)} />
+              ))}
+            </div>
+            <div className="variant-actions">
+              <button className="accent" disabled={!active} onClick={() => active && void chooseVariant(key, active.id)} title="Giữ bản đang xem; các bản khác bị loại (ghi lại cho agent học gu)">
+                {active ? `Chọn ${active.label}` : 'Chọn…'}
+              </button>
+              <button className="mini" onClick={() => void chooseVariant(key, null)} title="Giữ bản gốc, loại mọi phương án">
+                Giữ gốc
+              </button>
+            </div>
+          </div>
+        )
+      })}
+      <div className="hint">Bấm một bản để xem trên mọi màn dùng asset đó. Sync bị chặn khi còn bản đang xem thử chưa chọn.</div>
+    </div>
+  )
 }
 
 function SourceRow({ s }: { s: GameSource }): React.JSX.Element {
@@ -164,6 +237,7 @@ export function GamePanel(): React.JSX.Element {
           {Object.keys(game.screens).length} màn · {sources.length} file art{replaced ? ` · ${replaced} đã thay` : ''} · rev {game.revision}
         </div>
       </div>
+      <VariantsSection />
       <div className="game-filter">
         <input type="text" placeholder="Lọc file art…" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </div>

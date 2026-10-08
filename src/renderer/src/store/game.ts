@@ -12,6 +12,7 @@ import { clearAssetCache, getAssetBytes, pngFromCanvas, putAssetBytes, setAssetP
 import { openProject, saveProject } from './project'
 import { loadProjectFonts } from './fonts'
 import { COMPONENTS_SCREEN, prepareComponents, type PreparedComponent } from '@/model/gameComponents'
+import { decideVariant, showVariant, unresolvedPreviews, variantKey, variantLabel, type VariantDecision, type VariantTarget } from '@/model/gameVariants'
 
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp']
 
@@ -520,6 +521,9 @@ export function pendingChanges(): GameChanges | null {
  */
 export async function syncGame(opts: SyncOptions = {}): Promise<SyncResult> {
   const link = linked().game!
+  // an option on screen is a preview, not a decision: never write it into the game
+  const previews = unresolvedPreviews(useEditor.getState().doc)
+  if (previews.length) throw new Error(`Còn ${previews.length} asset đang xem thử phương án chưa chốt (${previews.map((s) => s.name).slice(0, 5).join(', ')}): chọn bản hoặc trả về Gốc trước khi Sync.`)
   const root = norm(link.root)
   if (!(await window.api.exists(root))) throw new Error(`Không thấy thư mục game: ${root}`)
   const dir = `${root}/${GAME_DIR}`
@@ -628,6 +632,76 @@ export async function ackGame(): Promise<{ elements: number; revision: number }>
   await saveProject()
   status('Đã ghi nhận: game khớp với thiết kế')
   return { elements, revision: useEditor.getState().doc.game!.revision }
+}
+
+// ----------------------------------------------------------------- art options (several versions of one asset)
+/**
+ * Adds generated versions of one asset as options (nothing changes on screen until one is previewed).
+ * Files are expected at the asset's size already (uiforge fit-art).
+ */
+export async function addArtVariants(target: VariantTarget, name: string, files: { file: string; label?: string }[]): Promise<{ key: string; options: string[] }> {
+  const doc = linked()
+  let original: string | undefined
+  if (target.kind === 'file') original = gameSources(doc).find((s) => s.source === target.source)?.currentAssetId ?? doc.game!.assets[target.source]?.assetId
+  else {
+    for (const p of doc.pages) {
+      const n = indexPage(p).byId.get(target.nodeId)?.node
+      if (n && (n.type === 'image' || n.type === 'nineslice')) original = n.assetId
+    }
+  }
+  if (!original) throw new Error(`Không tìm thấy asset ${target.kind === 'file' ? target.source : target.nodeId} trong project`)
+  const key = variantKey(target)
+  const existing = doc.game!.variants?.[key]
+  const loaded: { label: string; assetId: string; file: string }[] = []
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i]
+    const a = await assetFromBytes(await window.api.readFile(f.file), `${name}_${f.label ?? i + 1}`, `option:${f.file}`)
+    loaded.push({ label: f.label ?? variantLabel(f.file) ?? String.fromCharCode(65 + i), assetId: a.id, file: f.file })
+  }
+  useEditor.getState().update((d) => {
+    const link = d.game!
+    link.variants ??= {}
+    const set = (link.variants[key] ??= { name, target, originalAssetId: existing?.originalAssetId ?? original!, options: [], createdAt: new Date().toISOString() })
+    for (const o of loaded) {
+      if (set.options.some((x) => x.assetId === o.assetId)) continue
+      let label = o.label
+      for (let n = 2; set.options.some((x) => x.label === label); n++) label = `${o.label}_${n}`
+      set.options.push({ id: Math.random().toString(36).slice(2, 10), label, assetId: o.assetId, file: o.file })
+    }
+  }, { history: false })
+  const set = useEditor.getState().doc.game!.variants![key]
+  status(`${name}: ${set.options.length} phương án chờ chọn`)
+  return { key, options: set.options.map((o) => o.label) }
+}
+
+/** Shows an option on every screen using the asset; null = back to the original. */
+export function previewVariant(key: string, optionId: string | null): void {
+  useEditor.getState().update((d) => void showVariant(d, key, optionId), { history: false })
+}
+
+/** Shows the option labelled `label` for every pending asset that has one (the others go back to the original). */
+export function previewVariantSet(label: string | null): number {
+  let n = 0
+  useEditor.getState().update((d) => {
+    for (const [key, set] of Object.entries(d.game?.variants ?? {})) {
+      const opt = label ? set.options.find((o) => o.label === label) : undefined
+      showVariant(d, key, opt?.id ?? null)
+      if (opt) n++
+    }
+  }, { history: false })
+  return n
+}
+
+/** Keeps an option (null = keep the original, drop every option) and records the decision. */
+export async function chooseVariant(key: string, optionId: string | null): Promise<VariantDecision | null> {
+  let d: VariantDecision | null = null
+  useEditor.getState().update((doc) => {
+    d = decideVariant(doc, key, optionId)
+  })
+  if (useEditor.getState().projectDir) await saveProject()
+  const res = d as VariantDecision | null
+  if (res) status(res.chosen ? `${res.name}: chọn ${res.chosen}` : `${res.name}: giữ bản gốc`)
+  return res
 }
 
 // ----------------------------------------------------------------- the game's agent

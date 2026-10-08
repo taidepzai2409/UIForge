@@ -1397,3 +1397,15 @@ button.link {
 .game-log { margin-top: 8px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); font-family: Consolas, 'SF Mono', monospace; font-size: 11px; line-height: 16px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; flex-shrink: 0; }
 .replace-scope { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
 .replace-scope .hint { flex: 1; min-width: 0; }
+.game-variants { padding: 6px 12px 10px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; max-height: 50%; overflow: auto; flex-shrink: 0; }
+.variant-setbar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.variant-setbar .mini.on { color: var(--accent); background: var(--accent-bg); }
+.variant-row { display: flex; flex-direction: column; gap: 4px; padding: 6px 0; border-top: 1px solid var(--border-soft); }
+.variant-name { color: var(--text2); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.variant-name:hover { color: var(--accent); }
+.variant-opts { display: flex; gap: 4px; flex-wrap: wrap; }
+.variant-opt { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: var(--radius); background: transparent; }
+.variant-opt span { font-size: 10px; line-height: 12px; color: var(--dim); }
+.variant-opt.active { border-color: var(--accent); background: var(--accent-bg); }
+.variant-opt.active span { color: var(--accent); }
+.variant-actions { display: flex; gap: 6px; align-items: center; }

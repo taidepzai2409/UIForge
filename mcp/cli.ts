@@ -3,7 +3,9 @@
 //
 //   list-assets --root <game>                      what UI art the game shows → uiforge/ASSETS.{json,md,csv,png}
 //   fit-art --in <img> --root <game> --target <x>  a generated image → exact-size transparent PNG for that asset
-//   stage-art --root <game> --folder <dir>         new art into the UIForge project (not the game) for review
+//   stage-art --root <game> --folder <dir>         new art into the UIForge project (not the game) for review;
+//                                                  several versions of one asset (x_v1, x_v2…) become options
+//   variants --root <game>                         options waiting for the board + what it chose / dropped
 //
 // Output: ONE JSON line on stdout. Exit 0 = ok, 1 = error, 3 = a human must look (needs_review / app closed).
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
@@ -13,6 +15,7 @@ import { spawn } from 'node:child_process'
 import type { DesignDocument } from '@/model/types'
 import { assetsCsv, assetsMarkdown, listGameAssets, type AssetEntry } from '@/model/gameAssets'
 import { GAME_DIR } from '@/model/game'
+import { stripVariant, variantLabel } from '@/model/gameVariants'
 import { alphaBox, blank, blit, checkNineSlice, contactSheet, crop, cutWhiteBackground, isOpaque, readImage, removeSpecks, resize, writePng, type Img } from './art'
 
 // ---------------------------------------------------------------- output
@@ -54,7 +57,13 @@ function findEntry(list: AssetEntry[], target: string): AssetEntry | undefined {
   const byIndex = /^#?(\d+)$/.exec(t)
   if (byIndex) return list.find((e) => e.index === Number(byIndex[1]))
   const stem = basename(t).replace(/\.[^.]+$/, '')
-  return list.find((e) => e.file.toLowerCase() === t) ?? list.find((e) => e.stageName.toLowerCase() === stem) ?? list.find((e) => basename(e.file).toLowerCase() === basename(t))
+  return (
+    list.find((e) => e.file.toLowerCase() === t) ??
+    list.find((e) => e.stageName.toLowerCase() === stem) ??
+    list.find((e) => basename(e.file).toLowerCase() === basename(t)) ??
+    // an option of the asset: "btn_primary_v2" → "btn_primary"
+    list.find((e) => e.stageName.toLowerCase() === stripVariant(stem))
+  )
 }
 
 // ---------------------------------------------------------------- list-assets
@@ -249,22 +258,61 @@ async function stageArt(opt: Record<string, string | true>): Promise<never> {
   const matched = files.filter((f) => f.entry)
   const unmatched = files.filter((f) => !f.entry).map((f) => basename(f.file))
   if (!matched.length) fail('nothing_matched', `không file nào khớp stage name trong ASSETS (${unmatched.slice(0, 5).join(', ')})`)
-  if (opt['dry-run'] === true) done({ ok: true, dryRun: true, matched: matched.map((f) => ({ file: basename(f.file), asset: f.entry!.stageName, index: f.entry!.index })), unmatched })
+  // one file per asset = new art; several (x_v1, x_v2…) or an option-named file = options for the board
+  const groups = new Map<number, { entry: AssetEntry; files: string[] }>()
+  for (const f of matched) {
+    const g = groups.get(f.entry!.index) ?? { entry: f.entry!, files: [] }
+    g.files.push(f.file)
+    groups.set(f.entry!.index, g)
+  }
+  const plan = Array.from(groups.values()).map((g) => {
+    const asOptions = g.files.length > 1 || g.files.some((f) => basename(f).replace(/\.[^.]+$/, '').toLowerCase() !== g.entry.stageName.toLowerCase())
+    return { ...g, asOptions }
+  })
+  if (opt['dry-run'] === true)
+    done({ ok: true, dryRun: true, staged: plan.map((g) => ({ asset: g.entry.stageName, index: g.entry.index, mode: g.asOptions ? 'options' : 'replace', files: g.files.map((f) => basename(f)) })), unmatched })
   if (!(await ensureApp())) fail('app_not_running', 'Không mở được app UIForge — mở app rồi chạy lại', 3)
   await bridge('openGame', { root: posix(root), name: basename(root) })
-  const staged: { file: string; asset: string; changed: unknown }[] = []
-  const failed: { file: string; error: string }[] = []
-  for (const f of matched) {
-    const e = f.entry!
+  const staged: { asset: string; mode: string; files: string[]; result: unknown }[] = []
+  const failed: { asset: string; error: string }[] = []
+  for (const g of plan) {
+    const e = g.entry
+    const where = e.kind === 'file' ? { source: e.file } : { node: e.nodeId }
     try {
-      const r = await bridge<unknown>('replaceGameArt', e.kind === 'file' ? { source: e.file, file: posix(f.file) } : { node: e.nodeId, file: posix(f.file) })
-      staged.push({ file: basename(f.file), asset: e.stageName, changed: (r as { replaced?: unknown })?.replaced ?? r })
+      const r = g.asOptions
+        ? await bridge<unknown>('addArtVariants', { ...where, name: e.stageName, files: g.files.map((f) => ({ file: posix(f), label: variantLabel(basename(f)) ?? undefined })) })
+        : await bridge<unknown>('replaceGameArt', { ...where, file: posix(g.files[0]) })
+      staged.push({ asset: e.stageName, mode: g.asOptions ? 'options' : 'replace', files: g.files.map((f) => basename(f)), result: (r as { replaced?: unknown })?.replaced ?? r })
     } catch (err) {
-      failed.push({ file: basename(f.file), error: String((err as Error).message ?? err) })
+      failed.push({ asset: e.stageName, error: String((err as Error).message ?? err) })
     }
   }
   await bridge('save', {})
-  done({ ok: failed.length === 0, staged, unmatched, failed, next: 'Xem trong app UIForge (tab Game) → ưng thì bấm Sync → Game; art chưa ghi vào game' }, failed.length ? 1 : 0)
+  const options = staged.filter((s) => s.mode === 'options').length
+  done(
+    {
+      ok: failed.length === 0,
+      staged,
+      unmatched,
+      failed,
+      next: options
+        ? `Board mở UIForge → tab Game → "Phương án chờ chọn" (${options} asset): xem từng bản trên màn thật, Chọn → rồi Sync → Game. Đọc kết quả: uiforge variants --root <game>`
+        : 'Xem trong app UIForge (tab Game) → ưng thì bấm Sync → Game; art chưa ghi vào game'
+    },
+    failed.length ? 1 : 0
+  )
+}
+
+// ---------------------------------------------------------------- variants (file mode)
+function variants(opt: Record<string, string | true>): never {
+  if (typeof opt.root !== 'string') fail('bad_args', 'cần --root <thư mục game>')
+  const doc = loadProject(resolve(opt.root))
+  const g = doc.game
+  if (!g) fail('no_game_link', 'Project này chưa nối với game')
+  const pending = Object.entries(g.variants ?? {}).map(([key, s]) => ({ key, asset: s.name, options: s.options.map((o) => ({ label: o.label, file: posix(o.file) })), showing: s.options.find((o) => o.id === s.active)?.label ?? null }))
+  const since = typeof opt.since === 'string' ? Date.parse(opt.since) : 0
+  const decisions = (g.variantLog ?? []).filter((d) => !since || Date.parse(d.at) >= since).map((d) => ({ asset: d.name, chosen: d.chosen, rejected: d.rejected, files: d.files.map((f) => ({ label: f.label, file: posix(f.file) })), at: d.at }))
+  done({ ok: true, pending, decisions })
 }
 
 // ---------------------------------------------------------------- main
@@ -272,13 +320,16 @@ const HELP = `uiforge <lệnh> [tuỳ chọn]   (1 dòng JSON ra stdout; exit 0 
   list-assets --root <game> [--out-dir <dir>] [--no-sheet]
   fit-art --in <ảnh> (--root <game> --target <file game|stage name|#số> | --size WxH [--insets L,T,R,B])
           [--out <png>] [--mode contain|cover|stretch] [--pad <px>] [--keep-bg] [--keep-specks] [--force]
-  stage-art --root <game> (--folder <dir> | --file <ảnh> [--target …]) [--dry-run]`
+  stage-art --root <game> (--folder <dir> | --file <ảnh> [--target …]) [--dry-run]
+            (nhiều bản một asset: <stageName>_v1.png, _v2… → phương án để board chọn trong app)
+  variants --root <game> [--since <ISO date>]   phương án đang chờ + board đã chọn / loại gì`
 
 const { cmd, opt } = args(process.argv.slice(2))
 try {
   if (cmd === 'list-assets') listAssets(opt)
   else if (cmd === 'fit-art') fitArt(opt)
   else if (cmd === 'stage-art') await stageArt(opt)
+  else if (cmd === 'variants') variants(opt)
   else done({ ok: false, error: 'bad_args', message: HELP }, cmd === 'help' || cmd === '--help' || !cmd ? 0 : 1)
 } catch (e) {
   fail('error', String((e as Error)?.stack ?? e))

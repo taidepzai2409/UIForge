@@ -1028,6 +1028,20 @@ server.registerTool(
 )
 
 server.registerTool(
+  'get_art_variants',
+  { description: 'Phương án art đang chờ board chọn trong UIForge (mỗi asset nhiều bản v1/v2/…, bản đang xem thử) và lịch sử board đã chọn / loại bản nào — đọc để học gu sau mỗi batch. Nạp phương án: CLI `uiforge stage-art` với file <stageName>_v1.png, _v2….', inputSchema: { root: z.string().describe('thư mục game') } },
+  async ({ root }) => {
+    const file = join(gameDir(root), 'project.json')
+    if (!existsSync(file)) throw new Error(`Chưa có project UIForge: ${file}`)
+    const g = (JSON.parse(await readFile(file, 'utf8')) as DesignDocument).game
+    return text({
+      pending: Object.values(g?.variants ?? {}).map((s) => ({ asset: s.name, options: s.options.map((o) => o.label), showing: s.options.find((o) => o.id === s.active)?.label ?? null })),
+      decisions: (g?.variantLog ?? []).map((d) => ({ asset: d.name, chosen: d.chosen, rejected: d.rejected, at: d.at }))
+    })
+  }
+)
+
+server.registerTool(
   'replace_game_art',
   {
     description: 'Thay art trong project game trên UIForge (giống kéo-thả ảnh trong tab Game): source = file art của game (mọi element dùng file đó đổi theo) hoặc node = một element; file = ảnh mới. Hoặc folder = thư mục art mới, khớp theo tên file / id element. Sau đó sync_game để ghi về game.',

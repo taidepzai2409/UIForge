@@ -26,7 +26,7 @@ import { getCurrentPage, locate, useEditor } from '@/store/editor'
 import { exportLayout, importPsdFiles, openProject, saveProject } from '@/store/project'
 import { buildFrameLayout, buildPageManifest } from '@/export/layout'
 import { renderFramePng } from '@/canvas/render'
-import { ackGame, ensureGameProject, pendingChanges, pushGameDesign, replaceFromFolder, replaceNodeArt, replaceSource, runGameAgent, syncGame } from '@/store/game'
+import { ackGame, addArtVariants, chooseVariant, ensureGameProject, pendingChanges, previewVariant, previewVariantSet, pushGameDesign, replaceFromFolder, replaceNodeArt, replaceSource, runGameAgent, syncGame } from '@/store/game'
 import { buildChangesMarkdown, gameSources, type GameDesign } from '@/model/game'
 
 type Params = Record<string, unknown>
@@ -534,6 +534,36 @@ const handlers: Record<string, Handler> = {
     if (p.source) return { replaced: await replaceSource(String(p.source), bytes, String(p.file)) }
     if (p.node) return { replaced: await replaceNodeArt(findNode(String(p.node)).node.id, bytes, String(p.file)) }
     throw new Error('cần source (file ảnh của game) hoặc node')
+  },
+  // ---- art options (model/gameVariants.ts)
+  addArtVariants: async (p) => {
+    const files = ((p.files as { file: string; label?: string }[]) ?? []).filter((f) => f && f.file)
+    if (!files.length) throw new Error('cần files [{file, label?}]')
+    const target = p.source ? { kind: 'file' as const, source: String(p.source) } : p.node ? { kind: 'node' as const, nodeId: findNode(String(p.node)).node.id } : null
+    if (!target) throw new Error('cần source (file art của game) hoặc node')
+    const r = await addArtVariants(target, String(p.name ?? (target.kind === 'file' ? target.source.replace(/^.*\//, '').replace(/\.[^.]+$/, '') : target.nodeId)), files)
+    if (useEditor.getState().projectDir) await saveProject()
+    return r
+  },
+  artVariants: async () => {
+    const g = doc().game
+    return { pending: Object.entries(g?.variants ?? {}).map(([key, s]) => ({ key, name: s.name, options: s.options.map((o) => o.label), active: s.options.find((o) => o.id === s.active)?.label ?? null })), decisions: g?.variantLog ?? [] }
+  },
+  previewVariant: async (p) => {
+    const set = doc().game?.variants?.[String(p.key)]
+    if (!set) throw new Error(`không có bộ phương án ${p.key}`)
+    const opt = p.option ? set.options.find((o) => o.label === p.option || o.id === p.option) : undefined
+    if (p.option && !opt) throw new Error(`không có phương án ${p.option}`)
+    previewVariant(String(p.key), opt?.id ?? null)
+    return { key: p.key, showing: opt?.label ?? 'gốc' }
+  },
+  previewVariantSet: async (p) => ({ shown: previewVariantSet(p.label ? String(p.label) : null) }),
+  chooseVariant: async (p) => {
+    const set = doc().game?.variants?.[String(p.key)]
+    if (!set) throw new Error(`không có bộ phương án ${p.key}`)
+    const opt = p.option ? set.options.find((o) => o.label === p.option || o.id === p.option) : undefined
+    if (p.option && !opt) throw new Error(`không có phương án ${p.option}`)
+    return chooseVariant(String(p.key), opt?.id ?? null)
   },
   findNodes: async (p) => {
     const q = String(p.query ?? '').toLowerCase()

@@ -11,6 +11,7 @@ import { createFrame, createGroup, createImage, createInstance, createNineSlice,
 import { hexToRgba, rgbaToHex } from './color'
 import { DEFAULT_OVERLAY, defaultsForAction, normalizeConnection } from './flows'
 import { COMPONENTS_SCREEN, type GameComponentRule } from './gameComponents'
+import type { VariantDecision, VariantSet } from './gameVariants'
 import { findMaster, instanceChildId } from './instances'
 
 export const GAME_PAGE_NAME = 'Game UI'
@@ -172,6 +173,10 @@ export interface GameLink extends GameInfo {
   flows?: string[]
   /** component name → structure signature (model/gameComponents.ts) */
   componentSignatures?: Record<string, string>
+  /** art options waiting for the board (model/gameVariants.ts), by variantKey */
+  variants?: Record<string, VariantSet>
+  /** options the board chose / dropped, oldest first */
+  variantLog?: VariantDecision[]
 }
 
 // ----------------------------------------------------------------- helpers
