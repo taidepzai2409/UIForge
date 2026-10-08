@@ -318,6 +318,37 @@ export function checkNineSlice(img: Img, ins: { left: number; top: number; right
   return { ok, horizontal, vertical, note: ok ? 'phần giữa đủ phẳng để giãn' : 'phần giữa có hoạ tiết / gradient theo chiều giãn → kéo khung sẽ bị nhoè; vẽ phẳng phần giữa hoặc sửa insets' }
 }
 
+/**
+ * Fit art to a box of another ratio by stretching only its middle band (like a 1-axis 9-slice): scale
+ * uniformly to the box's short side, keep both caps (half that side each, so pill ends stay round) and
+ * resample the middle along the long axis. Gen tools stop at 16:9, so a 3:1 button comes out too short.
+ */
+export function sliceFit(img: Img, W: number, H: number): { img: Img; insets: { left: number; top: number; right: number; bottom: number } } | null {
+  const wide = W / H >= img.width / img.height
+  // work along x; a tall target is the same problem transposed
+  const k = wide ? H / img.height : W / img.width
+  const sw = Math.max(1, Math.round(img.width * k))
+  const sh = Math.max(1, Math.round(img.height * k))
+  const scaled = resize(img, sw, sh)
+  const out = blank(W, H)
+  if (wide) {
+    const cap = Math.min(Math.round(H / 2), Math.floor((sw - 2) / 2))
+    const mid = W - 2 * cap
+    if (cap < 1 || mid < 1) return null
+    blit(out, crop(scaled, { x: 0, y: 0, width: cap, height: sh }), 0, 0)
+    blit(out, resize(crop(scaled, { x: cap, y: 0, width: sw - 2 * cap, height: sh }), mid, sh), cap, 0)
+    blit(out, crop(scaled, { x: sw - cap, y: 0, width: cap, height: sh }), W - cap, 0)
+    return { img: out, insets: { left: cap, top: 0, right: cap, bottom: 0 } }
+  }
+  const cap = Math.min(Math.round(W / 2), Math.floor((sh - 2) / 2))
+  const mid = H - 2 * cap
+  if (cap < 1 || mid < 1) return null
+  blit(out, crop(scaled, { x: 0, y: 0, width: sw, height: cap }), 0, 0)
+  blit(out, resize(crop(scaled, { x: 0, y: cap, width: sw, height: sh - 2 * cap }), sw, mid), 0, cap)
+  blit(out, crop(scaled, { x: 0, y: sh - cap, width: sw, height: cap }), 0, H - cap)
+  return { img: out, insets: { left: 0, top: cap, right: 0, bottom: cap } }
+}
+
 // ---------------------------------------------------------------- contact sheet with index numbers
 const DIGITS: Record<string, string[]> = {
   '0': ['111', '101', '101', '101', '111'],

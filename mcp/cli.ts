@@ -19,7 +19,7 @@ import type { DesignDocument } from '@/model/types'
 import { assetsCsv, assetsMarkdown, listGameAssets, type AssetEntry } from '@/model/gameAssets'
 import { GAME_DIR } from '@/model/game'
 import { stripVariant, variantLabel } from '@/model/gameVariants'
-import { alphaBox, blank, blit, checkNineSlice, contactSheet, crop, cutWhiteBackground, isOpaque, readImage, removeSpecks, resize, writePng, type Img } from './art'
+import { alphaBox, blank, blit, checkNineSlice, contactSheet, crop, cutWhiteBackground, isOpaque, readImage, removeSpecks, resize, sliceFit, writePng, type Img } from './art'
 
 // ---------------------------------------------------------------- output
 function done(result: Record<string, unknown>, code = 0): never {
@@ -175,7 +175,14 @@ function fitArt(opt: Record<string, string | true>): never {
   const aspectOut = W / H
   const aspectOff = Math.abs(Math.log(aspectIn / aspectOut))
   let result: Img
-  if (mode === 'stretch' || (insets && typeof opt.mode !== 'string')) {
+  let sliced: { left: number; top: number; right: number; bottom: number } | undefined
+  if (mode === 'slice') {
+    // stretch only the middle band (buttons / bars longer than the 16:9 a gen tool can make)
+    const r = sliceFit(art, W, H)
+    if (!r) fail('slice_failed', `ảnh quá nhỏ để giãn phần giữa tới ${W}x${H}`)
+    result = r.img
+    sliced = r.insets
+  } else if (mode === 'stretch' || (insets && typeof opt.mode !== 'string')) {
     // a 9-slice frame fills its exact box by default (it is drawn to be stretched); --mode contain keeps the ratio
     result = resize(art, W, H)
     if (!insets && aspectOff > 0.05) warnings.push(`ảnh bị kéo giãn: tỉ lệ ${aspectIn.toFixed(2)} → ${aspectOut.toFixed(2)}`)
@@ -187,12 +194,14 @@ function fitArt(opt: Record<string, string | true>): never {
     result = blank(W, H)
     blit(result, art, Math.round((W - tw) / 2), Math.round((H - th) / 2))
     if (aspectOff > 0.15) warnings.push(`tỉ lệ ảnh gen (${aspectIn.toFixed(2)}) khác asset (${aspectOut.toFixed(2)}): ${mode === 'cover' ? 'bị cắt mép' : 'có khoảng trống hai bên'}`)
+    if (aspectOff > 0.15 && mode === 'contain') warnings.push('nút / thanh dài hơn khung gen → thử --mode slice (giữ hai đầu, giãn phần giữa)')
   }
-  const nine = insets ? checkNineSlice(result, insets) : undefined
-  if (nine && !nine.ok) warnings.push(nine.note)
+  const checkInsets = sliced ?? insets
+  const nine = checkInsets ? checkNineSlice(result, checkInsets) : undefined
+  if (nine && !nine.ok) warnings.push(sliced ? 'phần giữa có highlight / hoạ tiết nên giãn ra bị méo → gen lại với phần giữa phẳng (highlight dồn về hai đầu) hoặc cần người xem' : nine.note)
   mkdirSync(dirname(out), { recursive: true })
   writePng(out, result)
-  const needsReview = (nine && !nine.ok) || aspectOff > 0.35
+  const needsReview = (nine && !nine.ok) || (!sliced && aspectOff > 0.35)
   done(
     {
       ok: true,
@@ -203,6 +212,7 @@ function fitArt(opt: Record<string, string | true>): never {
       background: cut ? { cut: cut.cut, tolerance: cut.tolerance } : 'kept',
       specksRemoved: specks,
       nineSlice: nine,
+      sliced,
       warnings,
       needs_review: !!needsReview
     },
@@ -370,7 +380,7 @@ async function ack(opt: Record<string, string | true>): Promise<never> {
 const HELP = `uiforge <lệnh> [tuỳ chọn]   (1 dòng JSON ra stdout; exit 0 ok · 1 lỗi · 3 cần người xem)
   list-assets --root <game> [--out-dir <dir>] [--no-sheet]
   fit-art --in <ảnh> (--root <game> --target <file game|stage name|#số> | --size WxH [--insets L,T,R,B])
-          [--out <png>] [--mode contain|cover|stretch] [--pad <px>] [--keep-bg] [--keep-specks] [--force]
+          [--out <png>] [--mode contain|cover|stretch|slice] [--pad <px>] [--keep-bg] [--keep-specks] [--force]
   stage-art --root <game> (--folder <dir> | --file <ảnh> [--target …]) [--dry-run]
             (nhiều bản một asset: <stageName>_v1.png, _v2… → phương án để board chọn trong app)
   variants --root <game> [--since <ISO date>]   phương án đang chờ + board đã chọn / loại gì
