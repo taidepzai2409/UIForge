@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { produce } from 'immer'
+import { isDraft, original, produce } from 'immer'
 import type {
   Connection,
   ContainerNode,
@@ -10,12 +10,12 @@ import type {
 } from '@/model/types'
 import { isContainer } from '@/model/types'
 import { createDocument, createGroup, createImage, createNineSlice, createPage, newId } from '@/model/create'
-import { cloneNodeDeep, fitAllGroups, getEntry, indexPage } from '@/model/nodes'
-import { applyAutoLayouts } from '@/model/autoLayout'
+import { cloneNodeDeep, fitAllGroups, fitGroup, getEntry, indexPage } from '@/model/nodes'
+import { applyAutoLayouts, layoutContainer } from '@/model/autoLayout'
 import { applyAnchorSuggestions, suggestAnchors, type AutoAnchorRules } from '@/model/autoAnchor'
 import { DEFAULT_OVERLAY, defaultsForAction, normalizeConnection, normalizePage } from '@/model/flows'
 import { stateChildren } from '@/model/states'
-import { expandInstances, findMaster, usesComponent } from '@/model/instances'
+import { expandInstances, expandStale, findMaster, staleInstances, usesComponent } from '@/model/instances'
 import { createInstance } from '@/model/create'
 import type { AutoLayout, ImageEdits, InstanceOverride, ContainerNode as CNode, FrameNode, GroupNode } from '@/model/types'
 
@@ -147,20 +147,60 @@ export interface EditorState {
 
 const HISTORY_LIMIT = 200
 
+/** Containers of `next` that are not the same object as in `prev` (immer keeps untouched subtrees identical). */
+function changedContainers(prev: SceneNode[], next: SceneNode[], out: Set<SceneNode>): void {
+  if (prev === next) return
+  const before = new Map(prev.map((n) => [n.id, n]))
+  for (const n of next) {
+    if (!isContainer(n)) continue
+    const p = before.get(n.id)
+    if (p === n) continue
+    out.add(n)
+    changedContainers(p && isContainer(p) ? p.children : [], n.children, out)
+  }
+}
+
+/**
+ * Auto layout + group bounds, only inside the containers that changed between `prev` and `next`: the
+ * rest of the document was settled by an earlier mutation, and walking ~6k nodes through immer drafts
+ * on every drag step is what made big captured projects lag.
+ */
+function settle(prev: DesignDocument, next: DesignDocument, layout: boolean): DesignDocument {
+  const dirty = new Set<SceneNode>()
+  for (const page of next.pages) changedContainers(prev.pages.find((p) => p.id === page.id)?.children ?? [], page.children, dirty)
+  if (!dirty.size) return next
+  const touched = (n: SceneNode): boolean => isContainer(n) && dirty.has(isDraft(n) ? (original(n) as SceneNode) : n)
+  const relayout = (list: SceneNode[]): void => {
+    for (const n of list) {
+      if (!touched(n) || !isContainer(n)) continue
+      relayout(n.children)
+      if (n.type !== 'instance' && n.layout) layoutContainer(n)
+    }
+  }
+  const refit = (list: SceneNode[]): void => {
+    for (const n of list) {
+      if (!touched(n) || !isContainer(n)) continue
+      refit(n.children)
+      fitGroup(n)
+    }
+  }
+  return produce(next, (draft) => {
+    if (layout) for (const p of draft.pages) relayout(p.children)
+    for (const p of draft.pages) refit(p.children)
+  })
+}
+
 export const useEditor = create<EditorState>((set, get) => {
   const currentPage = (doc: DesignDocument, pageId: string): Page => doc.pages.find((p) => p.id === pageId) ?? doc.pages[0]
 
   const mutate = (fn: (doc: DesignDocument) => void, history = true): void => {
     const s = get()
-    const next = produce(s.doc, (draft) => {
-      fn(draft)
-      // post pass: auto layout → derived instance children → group bounds
-      for (const p of draft.pages) applyAutoLayouts(p.children)
-      for (const p of draft.pages) fitAllGroups(p.children)
-      expandInstances(draft)
-      for (const p of draft.pages) fitAllGroups(p.children)
-    })
-    if (next === s.doc) return
+    const raw = produce(s.doc, fn)
+    if (raw === s.doc) return
+    // post pass: auto layout → group bounds → derived instance children (stale ones only) → group bounds
+    const mid = settle(s.doc, raw, true)
+    const expanded = expandStale(mid, staleInstances(s.doc, mid))
+    const next = expanded === mid ? mid : settle(mid, expanded, false)
     if (history) {
       set({ doc: next, dirty: true, past: [...s.past.slice(-HISTORY_LIMIT), s.doc], future: [] })
     } else {
@@ -200,6 +240,11 @@ export const useEditor = create<EditorState>((set, get) => {
       set({
         doc: (() => {
           for (const p of doc.pages) normalizePage(p)
+          // mutations only settle what they touch, so start from a fully laid-out, expanded document
+          for (const p of doc.pages) applyAutoLayouts(p.children)
+          for (const p of doc.pages) fitAllGroups(p.children)
+          expandInstances(doc)
+          for (const p of doc.pages) fitAllGroups(p.children)
           return doc
         })(),
         projectDir,

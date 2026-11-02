@@ -124,6 +124,134 @@ export function layoutByAnchors(children: SceneNode[], W: number, H: number, w: 
   }
 }
 
+// ---------------------------------------------------------------- incremental expansion
+// Re-expanding every instance on every mutation clones the whole document (≈ 6k nodes and 700 instances
+// in a captured Unity UI → 350 ms per drag step, and every derived node gets a new object, so the scene
+// re-syncs them all). Instead the store compares the document before and after a mutation (immer keeps
+// unchanged subtrees identical) and re-expands only the instances whose own node or master changed.
+
+interface InstanceGraph {
+  masters: Map<NodeId, ContainerNode>
+  instances: Map<NodeId, InstanceNode>
+  /** component ids of the instances inside each master (any depth, not inside instances) */
+  deps: Map<NodeId, Set<NodeId>>
+}
+
+function instanceGraph(doc: DesignDocument): InstanceGraph {
+  const g: InstanceGraph = { masters: new Map(), instances: new Map(), deps: new Map() }
+  const visit = (list: SceneNode[], owners: NodeId[]): void => {
+    for (const n of list) {
+      if (!isContainer(n)) continue
+      if (n.type === 'instance') {
+        g.instances.set(n.id, n)
+        for (const o of owners) g.deps.get(o)!.add(n.componentId)
+        continue
+      }
+      if (n.component) {
+        g.masters.set(n.id, n)
+        g.deps.set(n.id, new Set())
+        visit(n.children, [...owners, n.id])
+      } else visit(n.children, owners)
+    }
+  }
+  for (const page of doc.pages) visit(page.children, [])
+  return g
+}
+
+/** Ids of the instances whose derived children are stale after the mutation prev → next. */
+export function staleInstances(prev: DesignDocument, next: DesignDocument): Set<NodeId> {
+  const a = instanceGraph(prev)
+  const b = instanceGraph(next)
+  const memo = new Map<NodeId, boolean>()
+  const masterDirty = (id: NodeId): boolean => {
+    const known = memo.get(id)
+    if (known !== undefined) return known
+    memo.set(id, false) // cycle guard
+    const m = b.masters.get(id)
+    const dirty = !m || a.masters.get(id) !== m || [...(b.deps.get(id) ?? [])].some(masterDirty)
+    memo.set(id, dirty)
+    return dirty
+  }
+  const out = new Set<NodeId>()
+  for (const [id, inst] of b.instances) {
+    if (a.instances.get(id) !== inst) out.add(id)
+    else if (!b.masters.has(inst.componentId)) {
+      if (inst.children.length) out.add(id)
+    } else if (masterDirty(inst.componentId)) out.add(id)
+  }
+  return out
+}
+
+/**
+ * Same result as expandInstances for the given instances, without mutating: returns a new document that
+ * shares every untouched subtree with `doc` (or `doc` itself when nothing changed).
+ */
+export function expandStale(doc: DesignDocument, stale: Set<NodeId>): DesignDocument {
+  if (!stale.size) return doc
+  const { masters } = instanceGraph(doc)
+  const resolved = new Map<NodeId, SceneNode[]>()
+  const busy = new Set<NodeId>()
+  const masterChildren = (id: NodeId): SceneNode[] | null => {
+    const m = masters.get(id)
+    if (!m || busy.has(id)) return null
+    let kids = resolved.get(id)
+    if (!kids) {
+      busy.add(id)
+      kids = resolveList(m.children)
+      busy.delete(id)
+      resolved.set(id, kids)
+    }
+    return kids
+  }
+  const expandOne = (inst: InstanceNode): InstanceNode => {
+    const m = masters.get(inst.componentId)
+    const kids = masterChildren(inst.componentId)
+    if (!m || !kids) return { ...inst, children: [] }
+    const out: InstanceNode = { ...inst, children: [] }
+    out.children = kids.map((c) => cloneForInstance(c, out, 0))
+    if (out.size && (Math.abs(out.size.width - m.width) > 0.01 || Math.abs(out.size.height - m.height) > 0.01)) {
+      layoutByAnchors(out.children, m.width, m.height, out.size.width, out.size.height)
+      out.width = out.size.width
+      out.height = out.size.height
+    } else {
+      out.width = m.width
+      out.height = m.height
+    }
+    return out
+  }
+  // a master is reached both from its instances and from the page walk: resolve each node once
+  const done = new Map<SceneNode, SceneNode>()
+  const resolveNode = (n: SceneNode): SceneNode => {
+    if (!isContainer(n)) return n
+    let r = done.get(n)
+    if (r) return r
+    if (n.type === 'instance') r = stale.has(n.id) ? expandOne(n) : n
+    else {
+      const kids = resolveList(n.children)
+      r = kids === n.children ? n : ({ ...n, children: kids } as SceneNode)
+    }
+    done.set(n, r)
+    return r
+  }
+  function resolveList(list: SceneNode[]): SceneNode[] {
+    let changed = false
+    const out = list.map((n) => {
+      const r = resolveNode(n)
+      if (r !== n) changed = true
+      return r
+    })
+    return changed ? out : list
+  }
+  let changed = false
+  const pages = doc.pages.map((p) => {
+    const kids = resolveList(p.children)
+    if (kids === p.children) return p
+    changed = true
+    return { ...p, children: kids }
+  })
+  return changed ? { ...doc, pages } : doc
+}
+
 /** Component ids used by an instance subtree (for cycle checks). */
 export function usesComponent(n: SceneNode, componentId: NodeId): boolean {
   if (n.type === 'instance' && n.componentId === componentId) return true
