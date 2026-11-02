@@ -597,6 +597,22 @@ aside.right {
 .row4 .field-label {
   min-width: 12px;
 }
+.slice-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px;
+  align-items: center;
+}
+button.mini.link-toggle {
+  height: 24px;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+}
+button.mini.link-toggle.on {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
 .check {
   display: flex;
   align-items: center;

@@ -13,6 +13,7 @@ import { canvasPalette, useTheme } from '@/store/theme'
 import { toScreen, toWorld, zoomAt } from './viewMath'
 import { onFontEpoch } from './fontEpoch'
 import { pixelSnapOn } from './pixelSnap'
+import { sliceLinkOn, uniformInsets } from './sliceLink'
 import {
   HANDLES,
   HANDLE_SIZE,
@@ -778,7 +779,9 @@ class ViewportController {
         if (d.edge === 'right') ins.right = clamp((r.x + r.width - wx) * kx, a.width - ins.left - 1)
         if (d.edge === 'top') ins.top = clamp((wy - r.y) * ky, a.height - ins.bottom - 1)
         if (d.edge === 'bottom') ins.bottom = clamp((r.y + r.height - wy) * ky, a.height - ins.top - 1)
-        s.setNodeProps(d.id, { insets: ins } as Partial<SceneNode>, { history: false })
+        // linked borders (properties panel): the dragged line sets all four
+        const linked = sliceLinkOn() ? uniformInsets(ins[d.edge as 'left' | 'top' | 'right' | 'bottom'], a.width, a.height) : ins
+        s.setNodeProps(d.id, { insets: linked } as Partial<SceneNode>, { history: false })
         return
       }
     }

@@ -14,6 +14,7 @@ import { getBlobUrl } from '@/store/assets'
 import { artUsage, pickAndReplaceNode } from '@/store/game'
 import { fontFamilies } from '@/store/fonts'
 import { Check, ColorField, NumField, Section, TextField } from './fields'
+import { setSliceLink, sliceLinkOn, uniformInsets } from '@/canvas/sliceLink'
 import { alignSelection, type AlignKind } from './actions'
 
 import { ConnectionEditor, FlowsOverview, PrototypeSection } from './PrototypePanel'
@@ -596,6 +597,18 @@ function ImageProps({ n }: { n: SceneNode & { assetId: string } }): React.JSX.El
     if (!ns) return
     st.setNodeProps(n.id, { insets: { ...ns.insets, ...patch } } as Partial<SceneNode>)
   }
+  const [linked, setLinked] = useState(sliceLinkOn)
+  const toggleLink = (): void => {
+    setSliceLink(!linked)
+    setLinked(!linked)
+  }
+  const setAll = (v: number): void => {
+    if (!ns) return
+    const w = asset?.width ?? Infinity
+    const h = asset?.height ?? Infinity
+    st.setNodeProps(n.id, { insets: uniformInsets(v, w, h) } as Partial<SceneNode>)
+  }
+  const same = ns ? ns.insets.left === ns.insets.top && ns.insets.left === ns.insets.right && ns.insets.left === ns.insets.bottom : true
   return (
     <Section title={ns ? '9-Slice' : 'Image'}>
       <div className="asset-preview">
@@ -629,11 +642,44 @@ function ImageProps({ n }: { n: SceneNode & { assetId: string } }): React.JSX.El
       </div>
       {ns && (
         <>
-          <div className="row4">
-            <NumField label="L" value={ns.insets.left} min={0} onChange={(v) => setIns({ left: v })} />
-            <NumField label="T" value={ns.insets.top} min={0} onChange={(v) => setIns({ top: v })} />
-            <NumField label="R" value={ns.insets.right} min={0} onChange={(v) => setIns({ right: v })} />
-            <NumField label="B" value={ns.insets.bottom} min={0} onChange={(v) => setIns({ bottom: v })} />
+          <div className="slice-row">
+            {linked ? (
+              <NumField
+                label="Viền"
+                value={Math.max(ns.insets.left, ns.insets.top, ns.insets.right, ns.insets.bottom)}
+                min={0}
+                title={same ? 'Cả 4 viền' : 'Các viền đang khác nhau — nhập số để đặt cả 4 bằng nhau'}
+                onChange={setAll}
+              />
+            ) : (
+              <div className="row4">
+                <NumField label="L" value={ns.insets.left} min={0} onChange={(v) => setIns({ left: v })} />
+                <NumField label="T" value={ns.insets.top} min={0} onChange={(v) => setIns({ top: v })} />
+                <NumField label="R" value={ns.insets.right} min={0} onChange={(v) => setIns({ right: v })} />
+                <NumField label="B" value={ns.insets.bottom} min={0} onChange={(v) => setIns({ bottom: v })} />
+              </div>
+            )}
+            <button
+              className={'mini link-toggle' + (linked ? ' on' : '')}
+              onClick={toggleLink}
+              title={linked ? 'Đang link: một số cho cả 4 viền — bấm để chỉnh từng viền' : 'Link 4 viền: một số cho cả 4 (kéo slice trên canvas cũng đổi cả 4)'}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                {linked ? (
+                  <>
+                    <path d="M6.5 9.5l3-3" />
+                    <path d="M7 4.5l1.2-1.2a2.5 2.5 0 013.5 3.5L10.5 8" />
+                    <path d="M9 11.5l-1.2 1.2a2.5 2.5 0 01-3.5-3.5L5.5 8" />
+                  </>
+                ) : (
+                  <>
+                    <path d="M7 4.5l1.2-1.2a2.5 2.5 0 013.5 3.5L10.5 8" />
+                    <path d="M9 11.5l-1.2 1.2a2.5 2.5 0 01-3.5-3.5L5.5 8" />
+                    <path d="M3 3l1.5 1.5M13 13l-1.5-1.5" />
+                  </>
+                )}
+              </svg>
+            </button>
           </div>
           <button className={editSlices ? 'accent' : ''} onClick={() => st.setEditSlices(!editSlices)}>
             {editSlices ? 'Xong chỉnh slice' : 'Chỉnh slice trên canvas'}
